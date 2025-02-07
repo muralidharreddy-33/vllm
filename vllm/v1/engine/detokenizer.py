@@ -8,7 +8,7 @@ from vllm.logger import init_logger
 from vllm.sampling_params import RequestOutputKind
 from vllm.transformers_utils.detokenizer_utils import (
     AnyTokenizer, convert_prompt_ids_to_tokens, detokenize_incrementally)
-from vllm.v1.engine import EngineCoreOutput, EngineCoreRequest, FinishReason
+from vllm.v1.engine import EngineCoreOutputs, EngineCoreRequest, FinishReason
 
 logger = init_logger(__name__)
 
@@ -98,17 +98,15 @@ class IncrementalDetokenizer:
 
     def update_from_output(
         self,
-        output: EngineCoreOutput,
+        new_token_ids: List[int],
+        finish_reason: Optional[FinishReason],
+        stop_reason: Union[int, str, None],
     ) -> Optional[DetokenizerOutput]:
         """
         Update RequestState for the request_id by:
             1) Detokenize the new token ids incrementally.
             2) Update the RequestOutput with the new text.
         """
-
-        new_token_ids = output.new_token_ids
-        finish_reason = output.finish_reason
-        stop_reason = output.stop_reason
 
         # 1) Detokenize the new token ids incrementally.
         # TODO(woosuk): This method becomes very inefficient when the number of

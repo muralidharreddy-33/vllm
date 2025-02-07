@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from vllm.outputs import RequestOutput
-    from vllm.v1.engine import EngineCoreOutput, FinishReason
+    from vllm.v1.engine import EngineCoreOutputs, FinishReason
 
 
 @dataclass
@@ -48,13 +48,12 @@ class IterationStats:
         self.time_to_first_tokens_iter: List[float] = []
         self.time_per_output_tokens_iter: List[float] = []
 
-    def update_from_output(self, output: "EngineCoreOutput",
+    def update_from_output(self, num_new_generation_tokens: int,
                            is_prefilling: bool, prompt_len: int,
                            request_state_stats: RequestStateStats):
         if not self.log_stats:
             return
 
-        num_new_generation_tokens = len(output.new_token_ids)
         now = time.time()
         last_token_latency = now - request_state_stats.last_token_time
 
@@ -62,7 +61,7 @@ class IterationStats:
         if is_prefilling:
             # This relies on the invariant that EngineCore does
             # not stream outputs for partially completed prefills
-            # (scheduler.update_from_output makes EngineCoreOutput
+            # (scheduler.update_from_output makes EngineCoreOutputs
             # iff num_computed_tokens == num_tokens).
             assert (num_new_generation_tokens > 0)
             self.num_prompt_tokens += prompt_len

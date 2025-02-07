@@ -249,19 +249,28 @@ class AsyncLLM(EngineClient):
                 # Split outputs into chunks of at most
                 # VLLM_V1_OUTPUT_PROC_CHUNK_SIZE, so that we don't block the
                 # event loop for too long.
-                num_outputs = len(outputs.outputs)
-                if num_outputs <= VLLM_V1_OUTPUT_PROC_CHUNK_SIZE:
-                    slices = (outputs.outputs, )
+                num_outputs = len(outputs.new_token_id_offsets)
+
+                if True or num_outputs <= VLLM_V1_OUTPUT_PROC_CHUNK_SIZE:
+                    slices = ((0, num_outputs), )
                 else:
-                    slices = np.array_split(
-                        outputs.outputs,
-                        cdiv(num_outputs, VLLM_V1_OUTPUT_PROC_CHUNK_SIZE))
+                    slices = []
+                    parts = np.linspace(
+                        num_outputs,
+                        cdiv(num_outputs, VLLM_V1_OUTPUT_PROC_CHUNK_SIZE),
+                        dtype='int')
+                    last = 0
+                    for i in parts:
+                        slices.append((last, i))
+                        last = i
+                    print(f"slices = {slices}")
 
                 iteration_stats = None
-                for i, outputs_slice in enumerate(slices):
+                for i, slice in enumerate(slices):
+                    slice_start, slice_end = slice
                     # 2) Process EngineCoreOutputs.
                     processed_outputs = self.output_processor.process_outputs(
-                        outputs_slice, iteration_stats)
+                        outputs, slice_start, slice_end, iteration_stats)
                     # NOTE: RequestOutputs are pushed to their queues.
                     assert not processed_outputs.request_outputs
                     iteration_stats = processed_outputs.iteration_stats

@@ -2,7 +2,7 @@
 
 import enum
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import msgspec
 
@@ -59,17 +59,17 @@ class EngineCoreRequest:
     lora_request: Optional["LoRARequest"]
 
 
-class EngineCoreOutput(
-        msgspec.Struct,
-        array_like=True,  # type: ignore[call-arg]
-        omit_defaults=True,  # type: ignore[call-arg]
-        gc=False):  # type: ignore[call-arg]
-
-    request_id: str
-    new_token_ids: List[int]
-    finished: bool
-    finish_reason: Optional[FinishReason] = None
-    stop_reason: Union[int, str, None] = None
+#class EngineCoreOutput(
+#        msgspec.Struct,
+#        array_like=True,  # type: ignore[call-arg]
+#        omit_defaults=True,  # type: ignore[call-arg]
+#        gc=False):  # type: ignore[call-arg]
+#
+#    request_id: str
+#    new_token_ids: List[int]
+#    finished: bool
+#    finish_reason: Optional[FinishReason] = None
+#    stop_reason: Union[int, str, None] = None
 
 
 class EngineCoreOutputs(
@@ -82,7 +82,12 @@ class EngineCoreOutputs(
     # e.g. columnwise layout
 
     # [num_reqs]
-    outputs: List[EngineCoreOutput]
+    request_ids: List[str]
+    new_token_id_offsets: List[int]
+    new_token_ids: List[int]
+    finished: List[bool]
+    finish_reason: Dict[str, FinishReason]  # Union[List, Dict]?
+    stop_reason: List[Union[int, str, None]]
     scheduler_stats: SchedulerStats
 
 
