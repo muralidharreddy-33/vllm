@@ -42,7 +42,7 @@ class QuarkW8A8Fp8(QuarkScheme):
             else:
                 max_w_scale = layer.weight_scale
                 weight = layer.weight
-                input_scale = layer.input_scape
+                input_scale = layer.input_scale
 
             max_w_scale, weight = requantize_with_max_scale(
                 weight=weight,
