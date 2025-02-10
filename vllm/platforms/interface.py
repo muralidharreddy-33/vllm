@@ -304,6 +304,11 @@ class Platform:
         """
         return float("-inf"), float("inf")
 
+    @classmethod
+    def can_update_inplace(cls) -> bool:
+        """Checks if the platform allows inplace memory updates"""
+        return True
+
 
 class UnspecifiedPlatform(Platform):
     _enum = PlatformEnum.UNSPECIFIED
