@@ -31,11 +31,11 @@ logger = init_logger(__name__)
 WEIGHT_LOADER_V2_SUPPORTED = [
     "CompressedTensorsLinearMethod", "AWQMarlinLinearMethod",
     "AWQLinearMethod", "GPTQMarlinLinearMethod", "Fp8LinearMethod",
-    "BitBLASLinearMethod", "GPTQBitBLASLinearMethod",
-    "MarlinLinearMethod", "QQQLinearMethod", "GPTQMarlin24LinearMethod",
-    "TPUInt8LinearMethod", "GPTQLinearMethod", "FBGEMMFp8LinearMethod",
-    "ModelOptFp8LinearMethod", "IPEXAWQLinearMethod", "IPEXGPTQLinearMethod",
-    "HQQMarlinMethod", "QuarkLinearMethod"
+    "BitBLASLinearMethod", "GPTQBitBLASLinearMethod", "MarlinLinearMethod",
+    "QQQLinearMethod", "GPTQMarlin24LinearMethod", "TPUInt8LinearMethod",
+    "GPTQLinearMethod", "FBGEMMFp8LinearMethod", "ModelOptFp8LinearMethod",
+    "IPEXAWQLinearMethod", "IPEXGPTQLinearMethod", "HQQMarlinMethod",
+    "QuarkLinearMethod"
 ]
 
 
@@ -49,8 +49,7 @@ def adjust_marlin_shard(param, shard_size, shard_offset):
 
 def adjust_bitblas_shard(param, shard_size, shard_offset):
     bitblas_tile_size = getattr(param, "bitblas_tile_size", None)
-    weight_propagation = getattr(param, "weight_propagation", None)
-    if weight_propagation and bitblas_tile_size is not None:
+    if bitblas_tile_size is not None:
         return (shard_size // bitblas_tile_size,
                 shard_offset // bitblas_tile_size)
 

@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, List, Optional
 
 import torch
-from torch.nn.parameter import Parameter
 
 from vllm.logger import init_logger
 from vllm.model_executor.layers.linear import LinearBase, LinearMethodBase
@@ -11,6 +11,10 @@ from vllm.model_executor.layers.quantization.utils.bitblas_utils import (
     BITBLAS_OPTIMIZE_FEATURES, BITBLAS_SUPPORTED_NUM_BITS,
     BITBLAS_SUPPORTED_SYM, MINIMUM_BITBLAS_VERSION)
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
+from vllm.model_executor.parameter import (BasevLLMParameter,
+                                           ChannelQuantScaleParameter,
+                                           GroupQuantScaleParameter,
+                                           PackedvLLMParameter)
 from vllm.model_executor.utils import set_weight_attrs
 
 logger = init_logger(__name__)
@@ -218,6 +222,8 @@ class BitBLASLinearMethod(LinearMethodBase):
             `quant_config`.
         """
         del input_size, output_size  # Unused arguments.
+        weight_loader = extra_weight_attrs["weight_loader"]
+
         if params_dtype not in self.quant_config.get_supported_act_dtypes():
             raise ValueError("Parameter data type must be torch.float16, "
                              f"but got {params_dtype}")
@@ -243,33 +249,21 @@ class BitBLASLinearMethod(LinearMethodBase):
         )
 
         # Initialize quantized weights with dimensions
-
-        qweight = Parameter(
-            torch.empty(
+        # Quantized 4Bit weights packed.
+        qweight = PackedvLLMParameter(
+            data=torch.empty(
                 self.bitblas_matmul.retrieve_weight_shape(),
                 device="cuda",
                 dtype=self.quant_config.storage_torch_dtype,
+                requires_grad=False,
             ),
-            requires_grad=False,
-        )
-        # Attributes to help with unpacking and applying the weights later.
-        set_weight_attrs(
-            qweight,
-            {
-                "input_dim":
-                1,
-                "output_dim":
-                0,
-                "packed_dim":
-                1,
-                "bitblas_tile_size":
-                (self.bitblas_matmul.retrieve_weight_shape()[-2]
-                 if self.bitblas_matmul.propagate_b else None),
-                "pack_factor":
-                self.quant_config.pack_factor,
-                "weight_propagation":
-                self.bitblas_matmul.propagate_b,
-            },
+            input_dim=1,
+            output_dim=0,
+            packed_dim=1,
+            packed_factor=self.quant_config.pack_factor,
+            bitblas_tile_size=(self.bitblas_matmul.retrieve_weight_shape()[-2]
+                               if self.bitblas_matmul.propagate_b else None),
+            weight_loader=weight_loader,
         )
 
         # Compute the number of input groups for channel-wise quantization.
@@ -277,60 +271,58 @@ class BitBLASLinearMethod(LinearMethodBase):
                         group_size)
 
         # Initialize scales and zeros for the quantized weights.
-        scales = Parameter(
+        weight_scale_args = {
+            "data":
             torch.empty(
                 output_size_per_partition,
                 input_groups,
                 device="cuda",
                 dtype=params_dtype,
             ),
-            requires_grad=False,
-        )
-        set_weight_attrs(scales, {
-            "input_dim": None if input_groups == 1 else 1,
-            "output_dim": 0
-        })
+            "weight_loader":
+            weight_loader
+        }
+        if input_groups == 1:
+            scales = ChannelQuantScaleParameter(output_dim=0,
+                                                **weight_scale_args)
+        else:
+            scales = GroupQuantScaleParameter(output_dim=0,
+                                              input_dim=1,
+                                              **weight_scale_args)
+
         if self.quant_config.zeros_mode == "quantized":
-            zeros = Parameter(
-                torch.empty(
+            zeros = PackedvLLMParameter(
+                data=torch.empty(
                     input_groups,
                     output_size_per_partition // self.quant_config.pack_factor,
                     device="cuda",
                     dtype=self.quant_config.storage_torch_dtype,
+                    requires_grad=False,
                 ),
-                requires_grad=False,
+                input_dim=0,
+                output_dim=1,
+                packed_dim=1,
+                packed_factor=self.quant_config.pack_factor,
+                weight_loader=weight_loader,
             )
-            # Set attributes to indicate how scales and zeros are applied.
 
-            set_weight_attrs(
-                zeros,
-                {
-                    "input_dim": None if input_groups == 1 else 0,
-                    "output_dim": 1,
-                    "packed_dim": 1,
-                    "pack_factor": self.quant_config.pack_factor,
-                },
-            )
         else:
-            zeros = Parameter(
+            zeros = BasevLLMParameter(
                 torch.empty(output_size_per_partition,
                             input_groups,
                             device="cuda",
                             dtype=params_dtype),
-                requires_grad=False,
+                weight_loader=weight_loader,
             )
             # Set attributes to indicate how scales and zeros are applied.
-            set_weight_attrs(scales, {
+            set_weight_attrs(zeros, {
                 "input_dim": None if input_groups == 1 else 1,
-                "output_dim": 0
+                "output_dim": 0,
             })
 
         layer.register_parameter("qweight", qweight)
-        set_weight_attrs(qweight, extra_weight_attrs)
         layer.register_parameter("scales", scales)
-        set_weight_attrs(scales, extra_weight_attrs)
         layer.register_parameter("zeros", zeros)
-        set_weight_attrs(zeros, extra_weight_attrs)
 
     def create_weights(
         self,

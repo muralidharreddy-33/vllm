@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, List, Optional, Set
 
 import torch
@@ -8,7 +9,7 @@ from vllm.model_executor.layers.linear import (LinearBase, LinearMethodBase,
                                                set_weight_attrs)
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig)
-from vllm.model_executor.layers.quantization.kernels import (
+from vllm.model_executor.layers.quantization.kernels.mixed_precision import (
     BitBLASLinearKernel, MPLinearLayerConfig)
 from vllm.model_executor.layers.quantization.utils.bitblas_utils import (
     BITBLAS_SUPPORTED_NUM_BITS as GPTQ_BITBLAS_SUPPORTED_NUM_BITS)
@@ -314,7 +315,6 @@ class GPTQBitBLASLinearMethod(LinearMethodBase):
             scales_and_zp_size = input_size_per_partition // group_size
 
         # Init buffers
-        # Quantized weights
         # Quantized weights
         qweight = PackedvLLMParameter(
             data=torch.empty(
