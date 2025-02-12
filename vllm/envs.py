@@ -572,6 +572,16 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # models the alignment is already naturally aligned to 256 bytes.
     "VLLM_CUDA_MEM_ALIGN_KV_CACHE":
     lambda: bool(int(os.getenv("VLLM_CUDA_MEM_ALIGN_KV_CACHE", "1"))),
+
+    # If set, vllm will capture a cuda graph of each specified size
+    # in addition to the default set of sizes. The sizes are specified
+    # as a comma-separated sequence of integers.
+    "VLLM_EXTRA_CUDA_GRAPH_SIZES":
+    lambda: [
+        int(s.strip())
+        for s in os.getenv("VLLM_EXTRA_CUDA_GRAPH_SIZES", "").split(',')
+        if s != ""
+    ]
 }
 
 # end-env-vars-definition
