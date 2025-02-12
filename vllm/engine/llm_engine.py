@@ -30,6 +30,7 @@ from vllm.engine.output_processor.util import create_output_by_sequence_group
 from vllm.entrypoints.openai.logits_processors import (
     get_logits_processors as get_openai_logits_processors)
 from vllm.executor.executor_base import ExecutorBase
+from vllm.features import FEATURES, FeaturesIncompatible, FeatureUsage
 from vllm.inputs import (INPUT_REGISTRY, InputRegistry, ProcessorInputs,
                          PromptType, SingletonInputsAdapter)
 from vllm.inputs.parse import is_encoder_decoder_inputs, is_token_prompt
@@ -733,12 +734,19 @@ class LLMEngine:
             raise ValueError(f"Got priority {priority} but "
                              "Priority scheduling is not enabled.")
 
-        if isinstance(params, SamplingParams) \
-            and (params.guided_decoding or params.logits_processors) \
-            and self.scheduler_config.num_scheduler_steps > 1:
-            raise ValueError(
-                "Guided decoding and logits processors are not supported "
-                "in multi-step decoding")
+        # Start with the set of base features enabled at the engine level
+        features = FeatureUsage(self.vllm_config.features)
+        # Add any additional features enabled at the request level
+        if isinstance(params, SamplingParams):
+            if params.using_guided_decoding():
+                features.add(FEATURES.STRUCTURED_OUTPUT)
+            if params.logits_processors:
+                features.add(FEATURES.LOGITS_PROCESSORS)
+            if params.n > 1:
+                features.add(FEATURES.BEST_OF)
+        # Ensure features are compatible
+        if not features.compatible():
+            raise FeaturesIncompatible(features.conflicts())
 
         if arrival_time is None:
             arrival_time = time.time()
@@ -1996,6 +2004,8 @@ class LLMEngine:
 
             # Unset so this doesn't get passed down to the model
             sampling_params.guided_decoding = None
+            # and leave behind a hint that guided decoding is in use
+            sampling_params.guided_decoding_in_use = True
 
         if (sampling_params.logit_bias or sampling_params.allowed_token_ids):
             tokenizer = self.get_tokenizer(lora_request=lora_request)

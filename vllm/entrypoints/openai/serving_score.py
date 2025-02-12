@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from http import HTTPStatus
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union, cast
 
 from fastapi import Request
@@ -14,6 +15,7 @@ from vllm.entrypoints.openai.protocol import (ErrorResponse, ScoreRequest,
                                               UsageInfo)
 from vllm.entrypoints.openai.serving_engine import OpenAIServing
 from vllm.entrypoints.openai.serving_models import OpenAIServingModels
+from vllm.features import FeaturesIncompatible
 from vllm.inputs.data import TokensPrompt
 from vllm.logger import init_logger
 from vllm.outputs import PoolingRequestOutput, ScoringRequestOutput
@@ -167,6 +169,10 @@ class OpenAIServingScores(OpenAIServing):
                 )
 
                 generators.append(generator)
+        except FeaturesIncompatible as e:
+            return self.create_error_response(message=str(e),
+                                              err_type="Conflict",
+                                              status_code=HTTPStatus.CONFLICT)
         except ValueError as e:
             # TODO: Use a vllm-specific Validation Error
             return self.create_error_response(str(e))

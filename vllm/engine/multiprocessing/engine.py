@@ -22,6 +22,7 @@ from vllm.engine.multiprocessing import (ENGINE_DEAD_ERROR, IPC_DATA_EXT,
                                          RPCResetPrefixCacheRequest,
                                          RPCStartupRequest, RPCStartupResponse,
                                          RPCUProfileRequest)
+from vllm.features import FeaturesIncompatible
 # yapf: enable
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
@@ -296,7 +297,7 @@ class MQLLMEngine:
         try:
             self.engine.add_lora(request.lora_request)
         except BaseException as e:
-            # Send back an error if the adater fails to load
+            # Send back an error if the adapter fails to load
             rpc_err = RPCError(request_id=request.request_id,
                                is_engine_errored=False,
                                exception=e)
@@ -384,6 +385,10 @@ def run_mp_engine(engine_args: AsyncEngineArgs, usage_context: UsageContext,
         signal.signal(signal.SIGTERM, signal_handler)
 
         engine.start()
+
+    except FeaturesIncompatible:
+        # A normal case where we can exit cleanly. It will be logged elsewhere.
+        engine_alive.value = False
 
     except BaseException as e:
         logger.exception(e)

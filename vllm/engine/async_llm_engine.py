@@ -562,6 +562,8 @@ async def build_guided_decoding_logits_processor_async(
 
     # Unset guided decoding params after constructing the lp from them
     sampling_params.guided_decoding = None
+    # and leave behind an easy way to detect that guided decoding is in use
+    sampling_params.guided_decoding_in_use = True
 
     return sampling_params
 
