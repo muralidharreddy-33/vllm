@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from typing import Optional, Tuple
 
 import torch
@@ -23,7 +24,8 @@ BITBLAS_SUPPORTED_NUM_BITS = [1, 2, 4, 8]
 BITBLAS_SUPPORTED_SYM = [False, True]
 
 
-# For binary size and compile time, we don't support the same types for with and
+# Determines the supported quantization types for BitBLAS based on the
+# device's capability and whether zero-point (zp) is used.
 def query_bitblas_supported_quant_types(has_zp: bool,
                                         device_capability: Optional[int] = None
                                         ):
