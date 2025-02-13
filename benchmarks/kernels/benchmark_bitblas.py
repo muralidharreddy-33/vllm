@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -105,7 +106,6 @@ args = parser.parse_args()
 
 # Assign arguments to variables
 target = args.target
-group_size = args.group_size
 A_dtype = args.A_dtype
 W_dtype = args.W_dtype
 accum_dtype = args.accum_dtype
@@ -117,519 +117,68 @@ with_scaling = args.with_scaling
 with_zeros = args.with_zeros
 zeros_mode = args.zeros_mode
 
-test_shapes = [
-    # square test
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            16384,
-            16384,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # BLOOM-176B
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            43008,
-            14336,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            14336,
-            14336,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            57344,
-            14336,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            14336,
-            57344,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # # OPT-65B
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            9216,
-            9216,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            36864,
-            9216,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            9216,
-            36864,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            22016,
-            8192,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # # LLAMA-70B/65B
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            8192,
-            22016,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            8192,
-            8192,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            28672,
-            8192,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            1,
-            8192,
-            28672,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # square test
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            16384,
-            16384,
-            16384,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # BLOOM-176B
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            43008,
-            14336,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            14336,
-            14336,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            57344,
-            14336,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            14336,
-            57344,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # # OPT-65B
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            9216,
-            9216,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            36864,
-            9216,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            9216,
-            36864,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            22016,
-            8192,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    # # LLAMA-70B/65B
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            8192,
-            22016,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            8192,
-            8192,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            28672,
-            8192,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
-    (
-        MatmulConfig,
-        Matmul,
-        (
-            8192,
-            8192,
-            28672,
-            A_dtype,
-            W_dtype,
-            out_dtype,
-            accum_dtype,
-            layout,
-            with_bias,
-            group_size,
-            with_scaling,
-            with_zeros,
-            zeros_mode,
-        ),
-    ),
+# Define a list of shared arguments that repeat in every config
+shared_args = [
+    A_dtype,
+    W_dtype,
+    out_dtype,
+    accum_dtype,
+    layout,
+    with_bias,
+    group_size,
+    with_scaling,
+    with_zeros,
+    zeros_mode,
 ]
+
+# Define just the (M, K, N) shapes in a more compact list
+shapes = [
+    # square test
+    (1, 16384, 16384),
+    # BLOOM-176B
+    (1, 43008, 14336),
+    (1, 14336, 14336),
+    (1, 57344, 14336),
+    (1, 14336, 57344),
+    # OPT-65B
+    (1, 9216, 9216),
+    (1, 36864, 9216),
+    (1, 9216, 36864),
+    (1, 22016, 8192),
+    # LLAMA-70B/65B
+    (1, 8192, 22016),
+    (1, 8192, 8192),
+    (1, 28672, 8192),
+    (1, 8192, 28672),
+    # square test
+    (16384, 16384, 16384),
+    # BLOOM-176B
+    (8192, 43008, 14336),
+    (8192, 14336, 14336),
+    (8192, 57344, 14336),
+    (8192, 14336, 57344),
+    # OPT-65B
+    (8192, 9216, 9216),
+    (8192, 36864, 9216),
+    (8192, 9216, 36864),
+    (8192, 22016, 8192),
+    # LLAMA-70B/65B
+    (8192, 8192, 22016),
+    (8192, 8192, 8192),
+    (8192, 28672, 8192),
+    (8192, 8192, 28672),
+]
+
+# Build test shapes with all the shared arguments
+test_shapes = [(MatmulConfig, Matmul, (*shape, *shared_args))
+               for shape in shapes]
 
 benchmark_sets = []
 benchmark_sets.extend(test_shapes)
 
-# fmt:on
-
 benchmark_results = {}
-for config, operator, input_args in benchmark_sets:
-    config = config(*input_args)
+for config_class, operator, input_args in benchmark_sets:
+    config = config_class(*input_args)
     matmul = operator(config, target=target, enable_tuning=True)
     kernel_latency = matmul.profile_latency()
 
@@ -650,37 +199,38 @@ headers = [
     "BitBLAS Top20 Latency",
 ]
 
+# Calculate column widths for pretty printing
 col_widths = [0, 0, 0]
-for config, values in benchmark_results.items():
-    args = config.split("-")
-    func_name = args[0]
-    input_args = "-".join(args[1:])
-    col_widths[0] = max((max(len(str(headers[0])), len(func_name)) + 2),
-                        col_widths[0])
-    col_widths[1] = max(
-        (max(len(str(headers[1])), len(input_args)) + 2, col_widths[1]))
-    col_widths[2] = max(
-        max(len(str(headers[2])),
-            len(f"{values['BitBLAS_top20_latency']:.3f} ms")) + 2,
-        col_widths[2],
-    )
-    break
+for config_key, values in benchmark_results.items():
+    args_split = config_key.split("-")
+    func_name = args_split[0]
+    input_args_str = "-".join(args_split[1:])
+    col_widths[0] = max(col_widths[0], len(func_name) + 2, len(headers[0]) + 2)
+    col_widths[1] = max(col_widths[1],
+                        len(input_args_str) + 2,
+                        len(headers[1]) + 2)
+    col_widths[2] = max(col_widths[2],
+                        len(f"{values['BitBLAS_top20_latency']:.3f} ms") + 2,
+                        len(headers[2]) + 2)
+    # break only if you want to measure widths from a single example;
+    # otherwise, let it loop over all items.
 
+# Print header
 for i, header in enumerate(headers):
     headers[i] = header.ljust(col_widths[i])
-
 print("".join(headers))
-
 print("-" * sum(col_widths))
 
-for config, values in benchmark_results.items():
-    args = config.split("-")
-    func_name = args[0]
-    input_args = "-".join(args[1:])
+# Print rows
+for config_key, values in benchmark_results.items():
+    args_split = config_key.split("-")
+    func_name = args_split[0]
+    input_args_str = "-".join(args_split[1:])
     row = [
         func_name,
-        input_args,
+        input_args_str,
         f"{values['BitBLAS_top20_latency']:.3f} ms",
     ]
-    print("".join([str(i).ljust(col_widths[j])
-                   for j, i in enumerate(row)]) + "\n")
+    row_str = "".join(
+        [str(cell).ljust(col_widths[idx]) for idx, cell in enumerate(row)])
+    print(row_str)
