@@ -52,6 +52,17 @@ The table below shows the compatibility of various quantization implementations 
   * ✗
   * ✗
   * ✗
+- * BitBLAS (GPTQ)
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ✗
+  * ✗
+  * ✗
+  * ✗
 - * INT8 (W8A8)
   * ✗
   * ✅︎
