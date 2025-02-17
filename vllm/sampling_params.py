@@ -12,6 +12,8 @@ from typing_extensions import Annotated
 
 from vllm.logger import init_logger
 from vllm.logits_process import LogitsProcessor
+from vllm.transformers_utils.tokenizer import AnyTokenizer
+from vllm.transformers_utils.tokenizers.mistral import MistralTokenizer
 
 logger = init_logger(__name__)
 
@@ -181,7 +183,6 @@ class SamplingParams(
     seed: Optional[int] = None
     stop: Optional[Union[str, List[str]]] = None
     stop_token_ids: Optional[List[int]] = None
-    bad_words: Optional[List[str]] = None
     ignore_eos: bool = False
     max_tokens: Optional[int] = 16
     min_tokens: int = 0
@@ -209,6 +210,10 @@ class SamplingParams(
     guided_decoding: Optional[GuidedDecodingParams] = None
     logit_bias: Optional[Dict[int, float]] = None
     allowed_token_ids: Optional[List[int]] = None
+
+    # Fields used for bad words
+    bad_words: Optional[List[str]] = None
+    _bad_words_token_ids: List[List[int]] = msgspec.field(default_factory=list)
 
     @staticmethod
     def from_optional(
@@ -440,6 +445,34 @@ class SamplingParams(
                     eos_ids.update(self.stop_token_ids)
                     self.stop_token_ids = list(eos_ids)
 
+    def update_from_tokenizer(self, tokenizer: AnyTokenizer) -> None:
+        if self.bad_words is None:
+            return
+        for bad_word in self.bad_words:
+            # To prohibit words both at the beginning
+            # and in the middle of text
+            # (related to add_prefix_space tokenizer parameter)
+            for add_prefix_space in [False, True]:
+                prefix = " " if add_prefix_space else ""
+                prompt = prefix + bad_word.lstrip()
+
+                if isinstance(tokenizer, MistralTokenizer):
+                    # Mistral tokenizers should not add special tokens
+                    prompt_token_ids = tokenizer.encode(text=prompt)
+                else:
+                    prompt_token_ids = tokenizer.encode(
+                        text=prompt, add_special_tokens=False
+                    )
+
+                # If no space at the beginning
+                # or if prefix space produces a new word token
+                if (not add_prefix_space) or (
+                    add_prefix_space
+                    and prompt_token_ids[0] != self._bad_words_token_ids[-1][0]
+                    and len(prompt_token_ids) == len(self._bad_words_token_ids[-1])
+                ):
+                    self._bad_words_token_ids.append(prompt_token_ids)
+
     @cached_property
     def sampling_type(self) -> SamplingType:
         if self.temperature < _SAMPLING_EPS:
@@ -451,6 +484,10 @@ class SamplingParams(
     @property
     def all_stop_token_ids(self) -> Set[int]:
         return self._all_stop_token_ids
+
+    @property
+    def bad_words_token_ids(self) -> List[List[int]]:
+        return self._bad_words_token_ids
 
     def clone(self) -> "SamplingParams":
         """Deep copy, but maybe not the LogitsProcessor objects.

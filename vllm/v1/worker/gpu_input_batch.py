@@ -195,6 +195,10 @@ class InputBatch:
         self.logit_bias: List[Optional[Dict[int,
                                             float]]] = [None] * max_num_reqs
 
+        self.bad_words_token_ids: List[List[List[int]]] = [
+            list() for _ in range(max_num_reqs)
+        ]
+
     def add_request(
         self,
         request: "CachedRequestState",
@@ -252,6 +256,7 @@ class InputBatch:
             self.repetition_penalties_reqs.add(req_id)
         self.min_tokens[req_index] = sampling_params.min_tokens
         self.stop_token_ids[req_index] = sampling_params.all_stop_token_ids
+        self.bad_words_token_ids[req_index] = sampling_params.bad_words_token_ids
 
         # NOTE(woosuk): self.generators should not include the requests that
         # do not have their own generator.
@@ -295,6 +300,7 @@ class InputBatch:
         self.generators.pop(req_index, None)
         self.num_logprobs.pop(req_id, None)
         self.num_prompt_logprobs.pop(req_id, None)
+        self.bad_words_token_ids.pop(req_id, None)
 
         # LoRA
         lora_id = self.request_lora_mapping[req_index]
@@ -326,6 +332,7 @@ class InputBatch:
         self.lora_id_to_lora_request.clear()
         self.lora_id_to_request_ids.clear()
         self.logit_bias = [None] * self.max_num_reqs
+        self.bad_words_token_ids.clear()
 
     def condense(self, empty_req_indices: List[int]) -> None:
         if self.num_reqs == 0:
@@ -375,6 +382,8 @@ class InputBatch:
             self.min_tokens[empty_index] = self.min_tokens[last_req_index]
             self.stop_token_ids[empty_index] = self.stop_token_ids[
                 last_req_index]
+            self.bad_words_token_ids[
+                empty_index] = self.bad_words_token_ids[last_req_index]
             generator = self.generators.pop(last_req_index, None)
             if generator is not None:
                 self.generators[empty_index] = generator
@@ -456,6 +465,7 @@ class InputBatch:
             stop_token_ids=self.stop_token_ids[:self.num_reqs],
             no_penalties=self.no_penalties,
             logit_bias=self.logit_bias[:self.num_reqs],
+            bad_words_token_ids=self.bad_words_token_ids[:self.num_reqs],
         )
 
     def _make_prompt_token_ids_tensor(self) -> torch.Tensor:

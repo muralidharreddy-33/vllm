@@ -5,6 +5,8 @@ from typing import Dict, List, Optional, Set
 
 import torch
 
+from vllm.transformers_utils.tokenizer import AnyTokenizer
+
 
 @dataclass
 class SamplingMetadata:
@@ -36,3 +38,5 @@ class SamplingMetadata:
     stop_token_ids: List[Set[int]]
 
     logit_bias: List[Optional[Dict[int, float]]]
+
+    bad_words_token_ids: List[List[List[int]]]
