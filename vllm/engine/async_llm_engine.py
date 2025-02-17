@@ -438,6 +438,7 @@ class _AsyncLLMEngine(LLMEngine):
         lora_request: Optional[LoRARequest] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        control_vector_request: Optional[ControlVectorRequest] = None,
         priority: int = 0,
     ) -> None:
         ...
@@ -452,6 +453,7 @@ class _AsyncLLMEngine(LLMEngine):
         lora_request: Optional[LoRARequest] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        control_vector_request: Optional[ControlVectorRequest] = None,
         priority: int = 0,
     ) -> None:
         ...
@@ -482,6 +484,10 @@ class _AsyncLLMEngine(LLMEngine):
         if lora_request is not None and not self.lora_config:
             raise ValueError(f"Got lora_request {lora_request} but LoRA is "
                              "not enabled!")
+        if (control_vector_request is not None
+                and not self.control_vector_config):
+            raise ValueError(f"Got cv_request {lora_request} but "
+                             "control vector is not enabled!")
         if priority != 0 and not self.scheduler_config.policy == "priority":
             raise ValueError(f"Got priority {priority} but "
                              "Priority scheduling is not enabled.")
@@ -859,6 +865,7 @@ class AsyncLLMEngine(EngineClient):
         lora_request: Optional[LoRARequest] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        control_vector_request: Optional[ControlVectorRequest] = None,
         priority: int = 0,
     ) -> Coroutine[None, None, AsyncGenerator[Union[
             RequestOutput, PoolingRequestOutput], None]]:
@@ -874,6 +881,7 @@ class AsyncLLMEngine(EngineClient):
         lora_request: Optional[LoRARequest] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        control_vector_request: Optional[ControlVectorRequest] = None,
         priority: int = 0,
     ) -> Coroutine[None, None, AsyncGenerator[Union[
             RequestOutput, PoolingRequestOutput], None]]:
@@ -892,6 +900,7 @@ class AsyncLLMEngine(EngineClient):
         lora_request: Optional[LoRARequest] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        control_vector_request: Optional[ControlVectorRequest] = None,
         priority: int = 0,
         *,
         inputs: Optional[PromptType] = None,  # DEPRECATED
@@ -924,6 +933,7 @@ class AsyncLLMEngine(EngineClient):
             lora_request=lora_request,
             trace_headers=trace_headers,
             prompt_adapter_request=prompt_adapter_request,
+            control_vector_request=control_vector_request,
             priority=priority,
         )
 
@@ -937,6 +947,7 @@ class AsyncLLMEngine(EngineClient):
         lora_request: Optional[LoRARequest] = None,
         trace_headers: Optional[Mapping[str, str]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
+        control_vector_request: Optional[ControlVectorRequest] = None,
         priority: int = 0,
     ) -> AsyncGenerator[RequestOutput, None]:
         """Generate outputs for a request.
@@ -1013,6 +1024,7 @@ class AsyncLLMEngine(EngineClient):
                     lora_request=lora_request,
                     trace_headers=trace_headers,
                     prompt_adapter_request=prompt_adapter_request,
+                    control_vector_request=control_vector_request,
                     priority=priority,
             ):
                 yield LLMEngine.validate_output(output, RequestOutput)
@@ -1192,6 +1204,10 @@ class AsyncLLMEngine(EngineClient):
 
     async def add_lora(self, lora_request: LoRARequest) -> None:
         self.engine.add_lora(lora_request)
+
+    async def add_control_vector(self,
+                                 cv_request: ControlVectorRequest) -> None:
+        self.engine.add_control_vector(cv_request)
 
 
 # TODO(v1): Remove this class proxy when V1 goes default.
