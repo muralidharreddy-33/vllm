@@ -461,8 +461,7 @@ class SamplingParams(
                     prompt_token_ids = tokenizer.encode(text=prompt)
                 else:
                     prompt_token_ids = tokenizer.encode(
-                        text=prompt, add_special_tokens=False
-                    )
+                        text=prompt, add_special_tokens=False)
 
                 # If no space at the beginning
                 # or if prefix space produces a new word token

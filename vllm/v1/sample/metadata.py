@@ -5,8 +5,6 @@ from typing import Dict, List, Optional, Set
 
 import torch
 
-from vllm.transformers_utils.tokenizer import AnyTokenizer
-
 
 @dataclass
 class SamplingMetadata:

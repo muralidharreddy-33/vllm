@@ -256,7 +256,8 @@ class InputBatch:
             self.repetition_penalties_reqs.add(req_id)
         self.min_tokens[req_index] = sampling_params.min_tokens
         self.stop_token_ids[req_index] = sampling_params.all_stop_token_ids
-        self.bad_words_token_ids[req_index] = sampling_params.bad_words_token_ids
+        self.bad_words_token_ids[
+            req_index] = sampling_params.bad_words_token_ids
 
         # NOTE(woosuk): self.generators should not include the requests that
         # do not have their own generator.
@@ -300,7 +301,6 @@ class InputBatch:
         self.generators.pop(req_index, None)
         self.num_logprobs.pop(req_id, None)
         self.num_prompt_logprobs.pop(req_id, None)
-        self.bad_words_token_ids.pop(req_id, None)
 
         # LoRA
         lora_id = self.request_lora_mapping[req_index]
@@ -312,6 +312,7 @@ class InputBatch:
             self.request_lora_mapping[req_index] = 0
 
         self.logit_bias[req_index] = None
+        self.bad_words_token_ids[req_index] = []
         return req_index
 
     def clear(self) -> None:
@@ -382,8 +383,8 @@ class InputBatch:
             self.min_tokens[empty_index] = self.min_tokens[last_req_index]
             self.stop_token_ids[empty_index] = self.stop_token_ids[
                 last_req_index]
-            self.bad_words_token_ids[
-                empty_index] = self.bad_words_token_ids[last_req_index]
+            self.bad_words_token_ids[empty_index] = self.bad_words_token_ids[
+                last_req_index]
             generator = self.generators.pop(last_req_index, None)
             if generator is not None:
                 self.generators[empty_index] = generator

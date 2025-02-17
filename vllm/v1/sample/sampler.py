@@ -217,7 +217,7 @@ class Sampler(nn.Module):
                 for token_id, bias in logit_bias.items():
                     logits[i, token_id] += bias
         return logits
-    
+
     def apply_bad_words(
         self,
         logits: torch.Tensor,
