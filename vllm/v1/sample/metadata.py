@@ -38,3 +38,5 @@ class SamplingMetadata:
     stop_token_ids: List[Set[int]]
 
     logit_bias: List[Optional[Dict[int, float]]]
+
+    bad_words_token_ids: List[List[List[int]]]

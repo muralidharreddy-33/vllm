@@ -6,6 +6,7 @@ import torch.nn as nn
 
 from vllm.v1.outputs import LogprobsTensors, SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
+from vllm.v1.sample.ops.bad_words import apply_bad_words
 from vllm.v1.sample.ops.penalties import (apply_all_penalties,
                                           apply_min_token_penalties)
 from vllm.v1.sample.ops.topk_topp_sampler import TopKTopPSampler
@@ -51,6 +52,8 @@ class Sampler(nn.Module):
         logits = self.apply_logits_bias(logits, sampling_metadata)
         # Apply penalties (e.g., min_tokens, freq_penalties).
         logits = self.apply_penalties(logits, sampling_metadata)
+        # Apply bad words exclusion
+        logits = self.apply_bad_words(logits, sampling_metadata)
         # Sample the next token.
         sampled = self.sample(logits, sampling_metadata)
 
@@ -227,3 +230,14 @@ class Sampler(nn.Module):
                 for token_id, bias in logit_bias.items():
                     logits[i, token_id] += bias
         return logits
+
+    def apply_bad_words(
+        self,
+        logits: torch.Tensor,
+        sampling_metadata: SamplingMetadata,
+    ) -> torch.Tensor:
+        return apply_bad_words(
+            logits,
+            sampling_metadata.bad_words_token_ids,
+            sampling_metadata.output_token_ids,
+        )

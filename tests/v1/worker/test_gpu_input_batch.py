@@ -67,6 +67,7 @@ def _construct_expected_sampling_metadata(
     stop_token_ids: List[Set[int]] = [set() for _ in range(num_reqs)]
     min_tokens = [0 for _ in range(num_reqs)]
     logit_bias = [None] * num_reqs
+    bad_words_token_ids: List[List[List[int]]] = [[] for _ in range(num_reqs)]
     for req in reqs:
         if req.req_id not in req_ids_retained:
             continue
@@ -87,6 +88,8 @@ def _construct_expected_sampling_metadata(
             index_in_input_batch] = req.sampling_params.all_stop_token_ids
         min_tokens[index_in_input_batch] = req.sampling_params.min_tokens
         logit_bias[index_in_input_batch] = req.sampling_params.logit_bias
+        bad_words_token_ids[index_in_input_batch] = (
+            req.sampling_params.bad_words_token_ids)
     return SamplingMetadata(
         temperature=torch.tensor(temperature, dtype=torch.float,
                                  device=device),
@@ -124,6 +127,7 @@ def _construct_expected_sampling_metadata(
                       and all(x == 0 for x in frequency_penalties)
                       and all(x == 1 for x in repetition_penalties)),
         logit_bias=logit_bias,
+        bad_words_token_ids=bad_words_token_ids,
     )
 
 
@@ -247,3 +251,5 @@ def test_sampling_metadata_in_input_batch(device: str, batch_size: int):
     assert expected_sampling_metadata.no_top_p == sampling_metadata.no_top_p
     assert expected_sampling_metadata.no_top_k == sampling_metadata.no_top_k
     assert expected_sampling_metadata.logit_bias == sampling_metadata.logit_bias
+    assert expected_sampling_metadata.bad_words_token_ids == \
+           sampling_metadata.bad_words_token_ids

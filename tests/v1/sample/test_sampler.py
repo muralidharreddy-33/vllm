@@ -97,6 +97,7 @@ def _create_default_sampling_metadata(
         min_tokens=[],
         stop_token_ids=[],
         logit_bias=[None] * batch_size,
+        bad_words_token_ids=[[] for _ in range(batch_size)],
     )
     return fake_sampling_metadata
 
@@ -166,6 +167,46 @@ def _create_weighted_output_token_list(
                 [token_id for _ in range(index + 1)])
         output_token_ids.append(output_token_ids_for_batch)
     return (output_token_ids, sorted_token_ids_in_output)
+
+
+def _create_bad_words_token_ids(
+        batch_size: int, vocab_size: int,
+        bad_words_lengths: List[Tuple[int]]) -> List[List[List[int]]]:
+    bad_words_token_ids = []
+    for _ in range(batch_size):
+        token_ids_single_batch = []
+        for bad_words_length in bad_words_lengths:
+            token_ids = np.random.choice(vocab_size,
+                                         size=bad_words_length,
+                                         replace=True).tolist()
+            token_ids_single_batch.append(token_ids)
+        bad_words_token_ids.append(token_ids_single_batch)
+    return bad_words_token_ids
+
+
+def _update_output_token_ids_for_bad_words(metadata: SamplingMetadata,
+                                           vocab_size: int) -> List[List[int]]:
+    bad_words_last_tokens = []
+    for batch_idx in range(len(metadata.bad_words_token_ids)):
+        bad_words_token_ids = metadata.bad_words_token_ids[batch_idx]
+        output_token_ids = metadata.output_token_ids[batch_idx]
+        bad_words_last_token: List[int] = []
+        for i, bad_word_token_ids in enumerate(bad_words_token_ids):
+            if len(bad_word_token_ids) == 1:
+                # Single token id always affects logits
+                bad_words_last_token.append(bad_word_token_ids[0])
+            else:
+                prefix_length = len(bad_word_token_ids) - 1
+                has_bad_words = np.random.choice([True, False])
+                if has_bad_words:
+                    output_token_ids[-prefix_length:] = bad_word_token_ids[:-1]
+                    bad_words_last_token.append(bad_word_token_ids[-1])
+                    break  # Maximum one update to output_token_ids
+                else:  # Make sure no accidental match to bad words
+                    output_token_ids[-1] = (bad_word_token_ids[-2] +
+                                            1) % vocab_size
+        bad_words_last_tokens.append(bad_words_last_token)
+    return bad_words_last_tokens
 
 
 @pytest.mark.parametrize("device", CUDA_DEVICES)
@@ -412,3 +453,34 @@ def test_sampler_logit_bias(device: str, batch_size: int, bias_value: float):
                                                                  1e-2)
             else:
                 assert logits_for_req[token_id] == pytest.approx(1e-2)
+
+
+@pytest.mark.parametrize("device", CUDA_DEVICES)
+@pytest.mark.parametrize("batch_size", [1, 2, 32])
+@pytest.mark.parametrize("bad_words_lengths", [(1, ), (1, 3), (2, 2)])
+def test_sampler_bad_words(device: str, batch_size: int,
+                           bad_words_lengths: List[Tuple[int]]):
+    """
+    Test to verify that when the bad words restriction is present, tokens
+    are penalized based on their match with the bad words.
+    """
+    torch.set_default_device(device)
+    # Create fake logits where each token is assigned the same
+    # logit value.
+    fake_logits = _create_fake_logits(batch_size, VOCAB_SIZE)
+    sampling_metadata = _create_default_sampling_metadata(
+        NUM_OUTPUT_TOKENS, batch_size, VOCAB_SIZE, torch.device(device))
+    sampling_metadata.bad_words_token_ids = _create_bad_words_token_ids(
+        batch_size, VOCAB_SIZE, bad_words_lengths)
+    bad_words_last_tokens = _update_output_token_ids_for_bad_words(
+        sampling_metadata, VOCAB_SIZE)
+    sampler = Sampler()
+    logits = sampler.apply_bad_words(fake_logits, sampling_metadata)
+    logits = logits.cpu()
+    for batch_idx in range(batch_size):
+        logits_for_req = logits[batch_idx]
+        for token_id in range(VOCAB_SIZE):
+            if token_id in bad_words_last_tokens[batch_idx]:
+                assert logits_for_req[token_id] == -float("inf")
+            else:
+                assert logits_for_req[token_id] != -float("inf")
