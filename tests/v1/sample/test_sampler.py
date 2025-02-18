@@ -182,8 +182,8 @@ def _create_bad_words_token_ids(
     return bad_words_token_ids
 
 
-def _update_output_token_ids_for_bad_words(
-        metadata: SamplingMetadata) -> List[List[int]]:
+def _update_output_token_ids_for_bad_words(metadata: SamplingMetadata,
+                                           vocab_size: int) -> List[List[int]]:
     bad_words_last_tokens = []
     for batch_idx in range(len(metadata.bad_words_token_ids)):
         bad_words_token_ids = metadata.bad_words_token_ids[batch_idx]
@@ -194,12 +194,15 @@ def _update_output_token_ids_for_bad_words(
                 # Single token id always affects logits
                 bad_words_last_token.append(bad_word_token_ids[0])
             else:
+                prefix_length = len(bad_word_token_ids) - 1
                 has_bad_words = np.random.choice([True, False])
                 if has_bad_words:
-                    prefix_length = len(bad_word_token_ids) - 1
                     output_token_ids[-prefix_length:] = bad_word_token_ids[:-1]
                     bad_words_last_token.append(bad_word_token_ids[-1])
                     break  # Maximum one update to output_token_ids
+                else:  # Make sure no accidental match to bad words
+                    output_token_ids[-1] = (bad_word_token_ids[-2] +
+                                            1) % vocab_size
         bad_words_last_tokens.append(bad_words_last_token)
     return bad_words_last_tokens
 
@@ -468,7 +471,7 @@ def test_sampler_bad_words(device: str, batch_size: int,
     sampling_metadata.bad_words_token_ids = _create_bad_words_token_ids(
         batch_size, VOCAB_SIZE, bad_words_lengths)
     bad_words_last_tokens = _update_output_token_ids_for_bad_words(
-        sampling_metadata)
+        sampling_metadata, VOCAB_SIZE)
     sampler = Sampler()
     logits = sampler.apply_bad_words(fake_logits, sampling_metadata)
     logits = logits.cpu()
