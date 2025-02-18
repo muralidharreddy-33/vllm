@@ -266,40 +266,6 @@ numba==0.60.0
     # via librosa
 numexpr==2.10.1
     # via lm-eval
-numpy==1.26.4
-    # via
-    #   -r requirements-test.in
-    #   accelerate
-    #   bitsandbytes
-    #   contourpy
-    #   cupy-cuda12x
-    #   datasets
-    #   decord
-    #   einx
-    #   encodec
-    #   evaluate
-    #   fastparquet
-    #   genai-perf
-    #   librosa
-    #   matplotlib
-    #   mistral-common
-    #   numba
-    #   numexpr
-    #   opencv-python-headless
-    #   pandas
-    #   patsy
-    #   peft
-    #   rouge-score
-    #   sacrebleu
-    #   scikit-learn
-    #   scipy
-    #   soxr
-    #   statsmodels
-    #   tensorizer
-    #   torchvision
-    #   transformers
-    #   tritonclient
-    #   vocos
 nvidia-cublas-cu12==12.4.5.8
     # via
     #   nvidia-cudnn-cu12
