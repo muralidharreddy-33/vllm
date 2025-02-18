@@ -67,7 +67,7 @@ def _construct_expected_sampling_metadata(
     stop_token_ids: List[Set[int]] = [set() for _ in range(num_reqs)]
     min_tokens = [0 for _ in range(num_reqs)]
     logit_bias = [None] * num_reqs
-    bad_words_token_ids = [[] for _ in range(num_reqs)]
+    bad_words_token_ids: List[List[List[int]]] = [[] for _ in range(num_reqs)]
     for req in reqs:
         if req.req_id not in req_ids_retained:
             continue
