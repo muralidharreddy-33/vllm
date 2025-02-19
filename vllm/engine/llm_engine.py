@@ -368,10 +368,9 @@ class LLMEngine:
 
                 self.stat_loggers = {
                     "logging":
-                    LoggingStatLogger(
-                        local_interval=self.vllm_config.
-                        observability_config.log_stats_interval,
-                        vllm_config=vllm_config),
+                    LoggingStatLogger(local_interval=self.vllm_config.
+                                      observability_config.log_stats_interval,
+                                      vllm_config=vllm_config),
                     "prometheus":
                     PrometheusStatLogger(
                         local_interval=self.vllm_config.observability_config.

@@ -1026,7 +1026,7 @@ class EngineArgs:
             "Different platforms may support different configs. Make sure the "
             "configs are valid for the platform you are using. The input format"
             " is like '{\"config_key\":\"config_value\"}'")
-        
+
         parser.add_argument('--log-stats-interval',
                             type=float,
                             default=EngineArgs.log_stats_interval,
