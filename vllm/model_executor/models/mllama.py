@@ -42,6 +42,7 @@ from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (ColumnParallelLinear,
+                                               QKVCrossParallelLinear,
                                                QKVParallelLinear,
                                                RowParallelLinear)
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
@@ -64,7 +65,7 @@ from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
 from .clip import CLIPMLP
 from .interfaces import SupportsMultiModal
 from .llama import LlamaDecoderLayer, LlamaMLP
-from .utils import QKVCrossParallelLinear, maybe_prefix
+from .utils import maybe_prefix
 
 logger = init_logger(__name__)
 
