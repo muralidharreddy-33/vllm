@@ -145,6 +145,7 @@ class RequestState:
             prompt=self.prompt,
             prompt_token_ids=self.prompt_token_ids,
             prompt_logprobs=prompt_logprobs,
+            outputs=[],
             finished=finished,
         )
 
