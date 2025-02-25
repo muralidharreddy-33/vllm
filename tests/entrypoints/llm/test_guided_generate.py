@@ -13,21 +13,26 @@ from vllm.entrypoints.llm import LLM
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import GuidedDecodingParams, SamplingParams
 
-MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 GUIDED_DECODING_BACKENDS = ["outlines", "lm-format-enforcer", "xgrammar"]
 
 
-@pytest.fixture(scope="module", params=["regular", "speculative"])
+@pytest.fixture(scope="module", params=["autoregressive", "speculative"])
 def llm(request):
 
     def get_llm_kwargs(mode: str):
-        if mode == "regular":
-            return {}
-        return {
-            # the model with fixed vocabulary size
-            "speculative_model": "tugstugi/Qwen2.5-Coder-0.5B-QwQ-draft",
-            "num_speculative_tokens": 3,
-        }
+        if mode == "autoregressive":
+            llm_kwargs = {}
+        elif mode == "speculative":
+            llm_kwargs = {
+                # the model with fixed vocabulary size
+                "speculative_model": "tugstugi/Qwen2.5-Coder-0.5B-QwQ-draft",
+                "num_speculative_tokens": 3,
+            }
+        else:
+            raise ValueError(f"Unsupported LLM mode: {mode}")
+
+        return llm_kwargs
 
     test_llm_kwargs = get_llm_kwargs(request.param)
     # pytest caches the fixture so we use weakref.proxy to
