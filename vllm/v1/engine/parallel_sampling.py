@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from copy import copy
 from typing import Optional, Tuple, Type, Union
 
+from vllm.outputs import RequestOutput
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 
@@ -23,6 +24,9 @@ class ParentRequest(ABC):
                                                       PoolingParams]) -> None:
         self.request_id = request_id
         self.params = params
+
+        # Used to aggregate child completions when not streaming
+        self.output_aggregator: Optional[RequestOutput] = None
 
     @property
     @abstractmethod

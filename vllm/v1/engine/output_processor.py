@@ -53,9 +53,6 @@ class RequestState:
         self.is_prefilling = True
         self.queue = queue
 
-        # Used to aggregate child completions when not streaming
-        self.output_aggregator: Optional[RequestOutput] = None
-
         self.stats = RequestStateStats(
             arrival_time=arrival_time) if log_stats else None
 
@@ -108,24 +105,25 @@ class RequestState:
             # Only the final output is required in FINAL_ONLY mode.
             return None
 
-        request_output: Optional[RequestOutput] = None
+        # Use an existing RequestOutput if we're aggregating
+        request_output = self.parent_req.output_aggregator
 
-        # Aggregate child completions when not streaming
-        if final_only and self.output_aggregator is not None:
-            request_output = self.output_aggregator
-            self.output_aggregator = None
-        else:
+        # Make new RequestOutput otherwise
+        if request_output is None:
             request_output = self._new_request_output(
                 self.parent_req.request_id, finished)
 
-        completion_output = self._new_completion_output(
-            new_token_ids, finish_reason, stop_reason)
-        request_output.outputs.append(completion_output)
+        # Add a new completion
+        request_output.outputs.append(
+            self._new_completion_output(new_token_ids, finish_reason,
+                                        stop_reason))
 
+        # If not streaming, aggregate until all child requests complete
         if (final_only and len(request_output.outputs) != self.parent_req.n):
-            self.output_aggregator = request_output
+            self.parent_req.output_aggregator = request_output
             return None
 
+        self.parent_req.output_aggregator = None
         return request_output
 
     def _new_request_output(
