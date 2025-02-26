@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from copy import copy
-from typing import Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 
 from vllm.outputs import RequestOutput
 from vllm.pooling_params import PoolingParams
@@ -90,3 +90,28 @@ class ParentRequest:
     def n(self) -> int:
         assert isinstance(self.params, SamplingParams)
         return self.params.n
+
+    def make_request_output(
+        self,
+        final_only: bool,
+        new_request_output: Callable[[str], RequestOutput],
+        append_completion_output: Callable[[RequestOutput], RequestOutput],
+    ) -> Optional[RequestOutput]:
+        # Use an existing RequestOutput if we're aggregating
+        request_output = self.output_aggregator
+
+        # Make new RequestOutput otherwise
+        if request_output is None:
+            request_output = new_request_output(self.request_id)
+
+        # Add a new completion
+        append_completion_output(request_output)
+
+        # If not streaming, aggregate until all child requests complete
+        if (final_only and len(request_output.outputs) != self.n):
+            self.output_aggregator = request_output
+            return None
+
+        # We're done aggregating
+        self.output_aggregator = None
+        return request_output

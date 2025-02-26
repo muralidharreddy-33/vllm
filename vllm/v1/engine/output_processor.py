@@ -105,30 +105,22 @@ class RequestState:
             # Only the final output is required in FINAL_ONLY mode.
             return None
 
-        # Use an existing RequestOutput if we're aggregating
-        request_output = (self.parent_req.output_aggregator
-                          if self.parent_req is not None else None)
+        def new_request_output(request_id: str) -> RequestOutput:
+            return self._new_request_output(request_id, finished)
 
-        # Make new RequestOutput otherwise
-        if request_output is None:
-            request_id = (self.parent_req.request_id
-                          if self.parent_req is not None else self.request_id)
-            request_output = self._new_request_output(request_id, finished)
+        def append_completion_output(
+                request_output: RequestOutput) -> RequestOutput:
+            request_output.outputs.append(
+                self._new_completion_output(new_token_ids, finish_reason,
+                                            stop_reason))
+            return request_output
 
-        # Add a new completion
-        request_output.outputs.append(
-            self._new_completion_output(new_token_ids, finish_reason,
-                                        stop_reason))
-
-        if self.parent_req is not None:
-            # If not streaming, aggregate until all child requests complete
-            if (final_only
-                    and len(request_output.outputs) != self.parent_req.n):
-                self.parent_req.output_aggregator = request_output
-                return None
-            self.parent_req.output_aggregator = None
-
-        return request_output
+        if self.parent_req is None:
+            return append_completion_output(new_request_output(
+                self.request_id))
+        else:
+            return self.parent_req.make_request_output(
+                final_only, new_request_output, append_completion_output)
 
     def _new_request_output(
         self,
