@@ -28,7 +28,7 @@ class RequestState:
     def __init__(
         self,
         request_id: str,
-        parent_req: ParentRequest,
+        parent_req: Optional[ParentRequest],
         request_index: int,
         lora_name: Optional[str],
         output_kind: RequestOutputKind,
@@ -61,7 +61,7 @@ class RequestState:
         cls,
         tokenizer: AnyTokenizer,
         request: EngineCoreRequest,
-        parent_req: ParentRequest,
+        parent_req: Optional[ParentRequest],
         request_index: int,
         queue: Optional[asyncio.Queue[RequestOutput]],
         log_stats: bool,
@@ -106,24 +106,28 @@ class RequestState:
             return None
 
         # Use an existing RequestOutput if we're aggregating
-        request_output = self.parent_req.output_aggregator
+        request_output = (self.parent_req.output_aggregator
+                          if self.parent_req is not None else None)
 
         # Make new RequestOutput otherwise
         if request_output is None:
-            request_output = self._new_request_output(
-                self.parent_req.request_id, finished)
+            request_id = (self.parent_req.request_id
+                          if self.parent_req is not None else self.request_id)
+            request_output = self._new_request_output(request_id, finished)
 
         # Add a new completion
         request_output.outputs.append(
             self._new_completion_output(new_token_ids, finish_reason,
                                         stop_reason))
 
-        # If not streaming, aggregate until all child requests complete
-        if (final_only and len(request_output.outputs) != self.parent_req.n):
-            self.parent_req.output_aggregator = request_output
-            return None
+        if self.parent_req is not None:
+            # If not streaming, aggregate until all child requests complete
+            if (final_only
+                    and len(request_output.outputs) != self.parent_req.n):
+                self.parent_req.output_aggregator = request_output
+                return None
+            self.parent_req.output_aggregator = None
 
-        self.parent_req.output_aggregator = None
         return request_output
 
     def _new_request_output(
@@ -208,7 +212,7 @@ class OutputProcessor:
     def add_request(
         self,
         request: EngineCoreRequest,
-        parent_req: ParentRequest,
+        parent_req: Optional[ParentRequest],
         request_index: int,
         queue: Optional[asyncio.Queue[RequestOutput]] = None,
     ) -> None:

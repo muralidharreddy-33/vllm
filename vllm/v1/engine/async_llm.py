@@ -148,13 +148,17 @@ class AsyncLLM(EngineClient):
 
         # 2) Fan out child requests (for n>1)
         parent_req = ParentRequest.from_params(request_id, params)
-        for idx in range(parent_req.n):
-            child_req_id, child_params = parent_req.get_child_info(idx)
+        n = params.n if isinstance(params, SamplingParams) else 1
+        for idx in range(n):
+            if parent_req is not None:
+                request_id, params = parent_req.get_child_info(idx)
 
             # 3) Convert Input --> Request.
-            request = self.processor.process_inputs(
-                child_req_id, prompt, child_params, arrival_time, lora_request,
-                trace_headers, prompt_adapter_request, priority)
+            request = self.processor.process_inputs(request_id, prompt, params,
+                                                    arrival_time, lora_request,
+                                                    trace_headers,
+                                                    prompt_adapter_request,
+                                                    priority)
 
             # 4) Add the request to OutputProcessor (this process).
             self.output_processor.add_request(request, parent_req, idx, queue)

@@ -154,13 +154,17 @@ class LLMEngine:
     ) -> None:
         # 1) Fan out child requests (for n>1)
         parent_req = ParentRequest.from_params(request_id, params)
-        for idx in range(parent_req.n):
-            child_req_id, child_params = parent_req.get_child_info(idx)
+        n = params.n if isinstance(params, SamplingParams) else None
+        for idx in range(n):
+            if parent_req is not None:
+                request_id, params = parent_req.get_child_info(idx)
 
             # 2) Process raw inputs into the request.
-            request = self.processor.process_inputs(
-                child_req_id, prompt, child_params, arrival_time, lora_request,
-                trace_headers, prompt_adapter_request, priority)
+            request = self.processor.process_inputs(request_id, prompt, params,
+                                                    arrival_time, lora_request,
+                                                    trace_headers,
+                                                    prompt_adapter_request,
+                                                    priority)
 
             # 3) Make a new RequestState and queue.
             self.output_processor.add_request(request, parent_req, idx)

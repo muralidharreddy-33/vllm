@@ -1,82 +1,46 @@
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import ABC, abstractmethod
 from copy import copy
-from typing import Optional, Tuple, Type, Union
+from typing import Optional, Tuple, Union
 
 from vllm.outputs import RequestOutput
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 
 
-class ParentRequest(ABC):
-    """A base class to allow for requests that may have children.
+class ParentRequest:
+    """Info, state & processing for parallel sampling request.
 
-    The parallel sub-class implements the `n` property and `get_child_info()`
-    method to fan out the request with multiple children. The singular
-    sub-class is just a thin wrapper of the request ID and params.
+    Store parent request ID and sampling params.
+    Facilitate generating child request sampling params.
     """
 
     request_id: str
     params: Union[SamplingParams, PoolingParams]
+
+    # To aggregate child completions when not streaming
+    output_aggregator: Optional[RequestOutput]
+
+    # To efficiently obtain child sampling params
+    cached_child_sampling_params: Optional[SamplingParams]
 
     def __init__(self, request_id: str, params: Union[SamplingParams,
                                                       PoolingParams]) -> None:
         self.request_id = request_id
         self.params = params
 
-        # Used to aggregate child completions when not streaming
-        self.output_aggregator: Optional[RequestOutput] = None
-
-    @property
-    @abstractmethod
-    def n(self) -> int:
-        return 1
-
-    @abstractmethod
-    def get_child_info(
-            self,
-            index: int) -> Tuple[str, Union[SamplingParams, PoolingParams]]:
-        pass
-
-    @staticmethod
-    def from_params(
-            request_id: str, params: Union[SamplingParams,
-                                           PoolingParams]) -> 'ParentRequest':
-        cls: Type[ParentRequest] = SingularSamplingRequest
-        if (isinstance(params, SamplingParams) and params.n is not None
-                and params.n > 1):
-            cls = ParallelSamplingRequest
-        return cls(request_id, params)
-
-
-class SingularSamplingRequest(ParentRequest):
-    """A request with no fan-out child requests."""
-
-    @property
-    def n(self) -> int:
-        return 1
-
-    def get_child_info(
-            self,
-            index: int) -> Tuple[str, Union[SamplingParams, PoolingParams]]:
-        return (self.request_id, self.params)
-
-
-class ParallelSamplingRequest(ParentRequest):
-    """Info, state & processing for parallel sampling request.
-    
-    Store parent request ID and sampling params.
-    Facilitate generating child request sampling params.
-    """
-
-    cached_child_sampling_params: Optional[SamplingParams]
-
-    def __init__(self, request_id: str,
-                 sampling_params: SamplingParams) -> None:
-        super().__init__(request_id, sampling_params)
-
+        self.output_aggregator = None
         self.cached_child_sampling_params = None
+
+    @classmethod
+    def from_params(
+        cls,
+        request_id: str,
+        params: Union[SamplingParams, PoolingParams],
+    ) -> Optional['ParentRequest']:
+        if not isinstance(params, SamplingParams) or params.n == 1:
+            return None
+        return cls(request_id, params)
 
     def _get_child_sampling_params(
         self,
