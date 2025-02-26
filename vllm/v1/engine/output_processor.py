@@ -309,18 +309,17 @@ class OutputProcessor:
                     # LLMEngine: return list of RequestOutputs.
                     request_outputs.append(request_output)
 
-                # Free completed requests.
-                if request_output.finished:
-                    self.request_states.pop(req_id)
-                    if not engine_core_output.finished:
-                        # If req not finished in EngineCore, but Detokenizer
-                        # detected stop string, abort needed in EngineCore.
-                        reqs_to_abort.append(req_id)
+            # Free completed requests.
+            if finish_reason is not None:
+                self.request_states.pop(req_id)
+                if not engine_core_output.finished:
+                    # If req not finished in EngineCore, but Detokenizer
+                    # detected stop string, abort needed in EngineCore.
+                    reqs_to_abort.append(req_id)
 
-                    # Track per-request stats
-                    self._update_stats_from_finished(req_state, request_output,
-                                                     finish_reason,
-                                                     iteration_stats)
+                # Track per-request stats
+                self._update_stats_from_finished(req_state, finish_reason,
+                                                 iteration_stats)
 
         self.lora_states.update_iteration_stats(iteration_stats)
 
@@ -347,7 +346,6 @@ class OutputProcessor:
                                            req_state.stats, lora_stats)
 
     def _update_stats_from_finished(self, req_state: RequestState,
-                                    request_output: RequestOutput,
                                     finish_reason: Optional[FinishReason],
                                     iteration_stats: Optional[IterationStats]):
         if iteration_stats is None:
@@ -355,7 +353,8 @@ class OutputProcessor:
 
         assert finish_reason is not None
         assert req_state.stats is not None
-        iteration_stats.update_from_finished_request(finish_reason,
-                                                     request_output,
-                                                     req_state.stats)
+        iteration_stats.update_from_finished_request(
+            finish_reason=finish_reason,
+            num_prompt_tokens=len(req_state.prompt_token_ids),
+            req_stats=req_state.stats)
         self.lora_states.finish_request(req_state)
