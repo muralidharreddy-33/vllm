@@ -158,11 +158,9 @@ class LLMEngine:
             child_req_id, child_params = parent_req.get_child_info(idx)
 
             # 2) Process raw inputs into the request.
-            request = self.processor.process_inputs(request_id, prompt, params,
-                                                    arrival_time, lora_request,
-                                                    trace_headers,
-                                                    prompt_adapter_request,
-                                                    priority)
+            request = self.processor.process_inputs(
+                child_req_id, prompt, child_params, arrival_time, lora_request,
+                trace_headers, prompt_adapter_request, priority)
 
             # 3) Make a new RequestState and queue.
             self.output_processor.add_request(request, parent_req, idx)
