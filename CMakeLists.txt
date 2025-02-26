@@ -34,7 +34,7 @@ set(PYTHON_SUPPORTED_VERSIONS "3.9" "3.10" "3.11" "3.12")
 set(CUDA_SUPPORTED_ARCHS "7.0;7.2;7.5;8.0;8.6;8.7;8.9;9.0")
 
 # Supported AMD GPU architectures.
-set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx940;gfx941;gfx942;gfx1030;gfx1100;gfx1101")
+set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101")
 
 #
 # Supported/expected torch versions for CUDA/ROCm.
@@ -175,6 +175,25 @@ file(MAKE_DIRECTORY ${FETCHCONTENT_BASE_DIR}) # Ensure the directory exists
 message(STATUS "FetchContent base directory: ${FETCHCONTENT_BASE_DIR}")
 
 #
+# Set rocm version dev int.
+#
+if(VLLM_GPU_LANG STREQUAL "HIP")
+  #
+  # Overriding the default -O set up by cmake, adding ggdb3 for the most verbose devug info
+  #
+  set(CMAKE_${VLLM_GPU_LANG}_FLAGS_DEBUG "${CMAKE_${VLLM_GPU_LANG}_FLAGS_DEBUG} -O0 -ggdb3")
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -ggdb3")
+
+
+  #
+  # Certain HIP functions are marked as [[nodiscard]], yet vllm ignores the result which generates
+  # a lot of warnings that always mask real issues. Suppressing until this is properly addressed.
+  #
+  set(CMAKE_${VLLM_GPU_LANG}_FLAGS "${CMAKE_${VLLM_GPU_LANG}_FLAGS} -Wno-unused-result")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-result")
+endif()
+
+#
 # Define other extension targets
 #
 
@@ -229,7 +248,7 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
 
   # Set CUTLASS_REVISION manually -- its revision detection doesn't work in this case.
   # Please keep this in sync with FetchContent_Declare line below.
-  set(CUTLASS_REVISION "v3.7.0" CACHE STRING "CUTLASS revision to use")
+  set(CUTLASS_REVISION "v3.8.0" CACHE STRING "CUTLASS revision to use")
 
   # Use the specified CUTLASS source directory for compilation if VLLM_CUTLASS_SRC_DIR is provided
   if (DEFINED ENV{VLLM_CUTLASS_SRC_DIR})
@@ -247,7 +266,7 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
         cutlass
         GIT_REPOSITORY https://github.com/nvidia/cutlass.git
         # Please keep this in sync with CUTLASS_REVISION line above.
-        GIT_TAG v3.7.0
+        GIT_TAG v3.8.0
         GIT_PROGRESS TRUE
 
         # Speed up CUTLASS download by retrieving only the specified GIT_TAG instead of the history.
@@ -267,6 +286,7 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
     "csrc/permute_cols.cu"
     "csrc/quantization/cutlass_w8a8/scaled_mm_entry.cu"
     "csrc/quantization/fp4/nvfp4_quant_entry.cu"
+    "csrc/quantization/fp4/nvfp4_scaled_mm_entry.cu"
     "csrc/sparse/cutlass/sparse_scaled_mm_entry.cu"
     "csrc/cutlass_extensions/common.cpp")
 
@@ -301,7 +321,7 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
   # CUDA 12.0 or later (and only work on Hopper, 9.0a for now).
   cuda_archs_loose_intersection(SCALED_MM_3X_ARCHS "9.0a" "${CUDA_ARCHS}")
   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER 12.0 AND SCALED_MM_3X_ARCHS)
-    set(SRCS 
+    set(SRCS
        "csrc/quantization/cutlass_w8a8/scaled_mm_c3x.cu"
        "csrc/quantization/cutlass_w8a8/c3x/scaled_mm_sm90_fp8.cu"
        "csrc/quantization/cutlass_w8a8/c3x/scaled_mm_sm90_int8.cu"
@@ -381,8 +401,9 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
   # FP4 Archs and flags
   cuda_archs_loose_intersection(FP4_ARCHS "10.0a" "${CUDA_ARCHS}")
   if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER 12.8 AND FP4_ARCHS)
-    set(SRCS 
+    set(SRCS
       "csrc/quantization/fp4/nvfp4_quant_kernels.cu"
+      "csrc/quantization/fp4/nvfp4_scaled_mm_kernels.cu"
     )
     set_gencode_flags_for_srcs(
       SRCS "${SRCS}"
@@ -591,7 +612,7 @@ endif()
 
 if(VLLM_FLASH_ATTN_SRC_DIR)
   FetchContent_Declare(
-          vllm-flash-attn SOURCE_DIR 
+          vllm-flash-attn SOURCE_DIR
           ${VLLM_FLASH_ATTN_SRC_DIR}
           BINARY_DIR ${CMAKE_BINARY_DIR}/vllm-flash-attn
   )
