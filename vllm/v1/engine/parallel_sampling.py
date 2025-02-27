@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from copy import copy
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Set, Tuple, Union
 
 from vllm.outputs import RequestOutput
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
+from vllm.v1.metrics.stats import IterationStats
 
 
 class ParentRequest:
@@ -18,8 +19,14 @@ class ParentRequest:
     request_id: str
     sampling_params: SamplingParams
 
+    # To track the completion of child requests
+    child_requests: Set[str]
+
     # To aggregate child completions when not streaming
     output_aggregator: Optional[RequestOutput]
+
+    # To find the max number of generated tokens across all children
+    max_num_generation_tokens: int
 
     # To efficiently obtain child sampling params
     cached_child_sampling_params: Optional[SamplingParams]
@@ -29,7 +36,9 @@ class ParentRequest:
         self.request_id = request_id
         self.sampling_params = sampling_params
 
+        self.child_requests = set()
         self.output_aggregator = None
+        self.max_num_generation_tokens = 0
         self.cached_child_sampling_params = None
 
     @classmethod
@@ -82,8 +91,12 @@ class ParentRequest:
         Returns:
           (request ID, sampling_params) tuple
         """
-        return (f"{index}_{self.request_id}",
-                self._get_child_sampling_params(index))
+        child_req_id = f"{index}_{self.request_id}"
+        self.child_requests.add(child_req_id)
+        return (child_req_id, self._get_child_sampling_params(index))
+
+    def finish_child_request(self, req_id: str):
+        self.child_requests.remove(req_id)
 
     @property
     def n(self) -> int:
@@ -113,3 +126,13 @@ class ParentRequest:
         # We're done aggregating
         self.output_aggregator = None
         return request_output
+
+    def observe_max_num_generation_tokens(self,
+                                          iteration_stats: IterationStats,
+                                          num_generation_tokens: int):
+        self.max_num_generation_tokens = max(num_generation_tokens,
+                                             self.max_num_generation_tokens)
+        if not self.child_requests:
+            # All child requests have finished, we can now record the max
+            iteration_stats.max_num_generation_tokens_iter.append(
+                self.max_num_generation_tokens)
