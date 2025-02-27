@@ -5,6 +5,9 @@ import os
 import signal
 import sys
 
+import vllm.entrypoints.cli.benchmark_latency
+import vllm.entrypoints.cli.benchmark_serving
+import vllm.entrypoints.cli.benchmark_throughput
 import vllm.entrypoints.cli.openai
 import vllm.entrypoints.cli.serve
 import vllm.version
@@ -16,6 +19,9 @@ logger = init_logger(__name__)
 CMD_MODULES = [
     vllm.entrypoints.cli.openai,
     vllm.entrypoints.cli.serve,
+    vllm.entrypoints.cli.benchmark_throughput,
+    vllm.entrypoints.cli.benchmark_latency,
+    vllm.entrypoints.cli.benchmark_serving,
 ]
 
 
