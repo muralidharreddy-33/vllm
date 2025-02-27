@@ -259,6 +259,7 @@ class ModelConfig:
         override_generation_config: Optional[Dict[str, Any]] = None,
         model_impl: Union[str, ModelImpl] = ModelImpl.AUTO,
     ) -> None:
+        self.model_weights = ""
         self.model = model
         self.hf_config_path = hf_config_path
         self.tokenizer = tokenizer
@@ -295,7 +296,7 @@ class ModelConfig:
                    f"'Please instead use `--hf-overrides '{hf_override!r}'`")
             warnings.warn(DeprecationWarning(msg), stacklevel=2)
 
-        self.maybe_pull_model_tokenizer_for_s3(model, tokenizer)
+        self._maybe_pull_model_tokenizer_for_s3(model, tokenizer)
 
         if (backend := envs.VLLM_ATTENTION_BACKEND
             ) and backend == "FLASHINFER" and find_spec("flashinfer") is None:
@@ -418,8 +419,8 @@ class ModelConfig:
         self._verify_cuda_graph()
         self._verify_bnb_config()
 
-    def maybe_pull_model_tokenizer_for_s3(self, model: str,
-                                          tokenizer: str) -> None:
+    def _maybe_pull_model_tokenizer_for_s3(self, model: str,
+                                           tokenizer: str) -> None:
         """
         Pull the model config or tokenizer to a temporary
         directory in case of S3.
