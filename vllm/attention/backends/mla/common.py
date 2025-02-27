@@ -1051,11 +1051,31 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
         # Handle the differences between the flash_attn_varlen from flash_attn
         # and the one from vllm_flash_attn. The former is used on RoCM and the
         # latter has an additional parameter to control FA2 vs FA3
-        self.flash_attn_varlen_func = flash_attn_varlen_func
-        if self.vllm_flash_attn_version is not None:
-            self.flash_attn_varlen_func = \
+        self._flash_attn_varlen_func = flash_attn_varlen_func
+        if self._flash_attn_varlen_func is not None:
+            self._flash_attn_varlen_func = \
                 functools.partial(flash_attn_varlen_func,
                                   fa_version=self.vllm_flash_attn_version)
+
+        # For MLA the v head dim is smaller than qk head dim so we pad out
+        # v with 0s to match the qk head dim for attention backends that do
+        # not support different headdims
+        # We don't need to pad V if we are on a hopper system with FA3
+        self._pad_v = self.vllm_flash_attn_version is None or not (
+            self.vllm_flash_attn_version == 3
+            and current_platform.get_device_capability()[0] == 9)
+
+    def flash_attn_varlen_diff_headdims(self, q, k, v, **kwargs):
+        maybe_padded_v = v
+        if self._pad_v:
+            maybe_padded_v = torch.nn.functional.pad(
+                v, [0, q.shape[-1] - v.shape[-1]], value=0)
+        # rest in case we have softmax lse output
+        attn_output, *rest = self._flash_attn_varlen_func(
+            q, k, maybe_padded_v, **kwargs)
+        if self._pad_v:
+            attn_output = attn_output[:, :, :v.shape[-1]], *rest
+        return attn_output, *rest
 
     def _v_up_proj_and_o_proj(self, x):
         if envs.VLLM_MLA_PERFORM_MATRIX_ABSORPTION:
@@ -1309,24 +1329,19 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
             k = torch.cat((k_nope, k_pe.expand((*k_nope.shape[:-1], -1))),
                           dim=-1)
 
-            # For MLA the v head dim is smaller than qk head dim so we pad
-            # out v with 0s to match the qk head dim
-            v_padded = torch.nn.functional.pad(v,
-                                               [0, q.shape[-1] - v.shape[-1]],
-                                               value=0)
-
-            attn_output, attn_softmax_lse = self.flash_attn_varlen_func(
-                q=q,
-                k=k,
-                v=v_padded,
-                cu_seqlens_q=prefill_metadata.query_start_loc,
-                cu_seqlens_k=prefill_metadata.context_chunk_cu_seq_lens[i],
-                max_seqlen_q=prefill_metadata.max_query_len,
-                max_seqlen_k=prefill_metadata.context_chunk_max_seq_lens[i],
-                softmax_scale=self.scale,
-                causal=False,  # Context is unmasked
-                return_softmax_lse=True,
-            )
+            attn_output, attn_softmax_lse = \
+                self.flash_attn_varlen_diff_headdims(
+                    q=q,
+                    k=k,
+                    v=v,
+                    cu_seqlens_q=prefill_metadata.query_start_loc,
+                    cu_seqlens_k=prefill_metadata.context_chunk_cu_seq_lens[i],
+                    max_seqlen_q=prefill_metadata.max_query_len,
+                    max_seqlen_k=prefill_metadata.context_chunk_max_seq_lens[i],
+                    softmax_scale=self.scale,
+                    causal=False,  # Context is unmasked
+                    return_softmax_lse=True,
+                )
 
             if output is None:
                 output = attn_output
@@ -1369,20 +1384,12 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
 
         k = torch.cat((k_nope, k_pe.expand((*k_nope.shape[:-1], -1))), dim=-1)
 
-        # For MLA the v head dim is smaller than qk head dim so we pad out
-        # v with 0s to match the qk head dim
-        v_dim = v.shape[-1]
-        pad_v = self.vllm_flash_attn_version < 3
-        if pad_v:
-            v = torch.nn.functional.pad(v, [0, q.shape[-1] - v.shape[-1]],
-                                        value=0)
-
         if has_context:
             if not current_platform.is_cuda():
                 raise NotImplementedError(
                     "Chunked Prefill for MLA is not currently supported on"
                     "non-cuda platforms")
-            output = self.flash_attn_varlen_func(
+            output = self.flash_attn_varlen_diff_headdims(
                 q=q,
                 k=k,
                 v=v,
@@ -1395,7 +1402,7 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
                 return_softmax_lse=True,
             )
         else:
-            output = self.flash_attn_varlen_func(
+            output = self.flash_attn_varlen_diff_headdims(
                 q=q,
                 k=k,
                 v=v,
@@ -1421,13 +1428,7 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
                 suffix_lse=suffix_lse,
             )
 
-        # slice by `:v.shape[-1]` in order to remove v headdim padding
-        if pad_v:
-            attn_output = attn_output\
-                .view(-1, self.num_heads, q.shape[-1])[..., :v_dim]
-
-        attn_output = attn_output.reshape(-1, self.num_heads * v_dim)
-        return self.o_proj(output)[0]
+        return self.o_proj(output[0].flatten(start_dim=-2))[0]
 
     @abstractmethod
     def _forward_decode(
