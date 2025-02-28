@@ -56,6 +56,7 @@ try:
 except ImportError:
     from argparse import ArgumentParser as FlexibleArgumentParser
 
+from benchmark_dataset import RandomDataset, ShareGPTDataset, SonnetDataset
 from benchmark_utils import convert_to_pytorch_benchmark_format, write_to_json
 
 MILLISECONDS_TO_SECONDS_CONVERSION = 1000
@@ -872,12 +873,11 @@ def main(args: argparse.Namespace):
             "'--dataset-path' if required.")
 
     elif args.dataset_name == "sharegpt":
-        input_requests = sample_sharegpt_requests(
-            dataset_path=args.dataset_path,
-            num_requests=args.num_prompts,
+        input_requests = ShareGPTDataset(
             tokenizer=tokenizer,
-            fixed_output_len=args.sharegpt_output_len,
-        )
+            num_requests=args.num_prompts,
+            output_len=args.sharegpt_output_len,
+            dataset_path=args.dataset_path).sample(return_tuple=True)
 
     elif args.dataset_name == "burstgpt":
         input_requests = sample_burstgpt_requests(
@@ -889,33 +889,21 @@ def main(args: argparse.Namespace):
 
     elif args.dataset_name == "sonnet":
         # Do not format the prompt, pass to message directly
+        dataset = SonnetDataset(dataset_path=args.dataset_path,
+                                num_requests=args.num_prompts,
+                                input_len=args.sonnet_input_len,
+                                output_len=args.sonnet_output_len,
+                                prefix_len=args.sonnet_prefix_len,
+                                tokenizer=tokenizer)
         if args.backend == "openai-chat":
-            input_requests = sample_sonnet_requests(
-                dataset_path=args.dataset_path,
-                num_requests=args.num_prompts,
-                input_len=args.sonnet_input_len,
-                output_len=args.sonnet_output_len,
-                prefix_len=args.sonnet_prefix_len,
-                tokenizer=tokenizer,
-            )
-            input_requests = [(prompt, prompt_len, output_len, None)
-                              for prompt, prompt_formatted, prompt_len,
-                              output_len, _ in input_requests]
+            input_requests = dataset.sample(return_tuple=True,
+                                            return_prompt_formatted=False)
         else:
             assert (
                 tokenizer.chat_template or tokenizer.default_chat_template
             ), "Tokenizer/model must have chat template for sonnet dataset."
-            input_requests = sample_sonnet_requests(
-                dataset_path=args.dataset_path,
-                num_requests=args.num_prompts,
-                input_len=args.sonnet_input_len,
-                output_len=args.sonnet_output_len,
-                prefix_len=args.sonnet_prefix_len,
-                tokenizer=tokenizer,
-            )
-            input_requests = [(prompt_formatted, prompt_len, output_len, None)
-                              for prompt, prompt_formatted, prompt_len,
-                              output_len, _ in input_requests]
+            input_requests = dataset.sample(return_tuple=True,
+                                            return_prompt_formatted=True)
 
     elif args.dataset_name == "hf":
         input_requests = sample_hf_requests(
@@ -929,14 +917,14 @@ def main(args: argparse.Namespace):
         )
 
     elif args.dataset_name == "random":
-        input_requests = sample_random_requests(
+        input_requests = RandomDataset(
+            tokenizer=tokenizer,
             prefix_len=args.random_prefix_len,
             input_len=args.random_input_len,
             output_len=args.random_output_len,
-            num_prompts=args.num_prompts,
+            num_requests=args.num_prompts,
             range_ratio=args.random_range_ratio,
-            tokenizer=tokenizer,
-        )
+            dataset_path=args.dataset_path).sample(return_tuple=True)
 
     else:
         raise ValueError(f"Unknown dataset: {args.dataset_name}")
