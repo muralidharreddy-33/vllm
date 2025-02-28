@@ -71,6 +71,9 @@ def v1(run_with_both_engines_lora):
     # This can be promoted up to conftest.py to run for every
     # test in a package
 
+    # Release any memory before runs. The CI OOMs without this.
+    torch.cuda.empty_cache()
+
     # Reload punica_gpu as the kernels used are tied to engine type.
     from vllm.lora.punica_wrapper import punica_gpu
     importlib.reload(punica_gpu)
