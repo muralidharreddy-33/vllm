@@ -108,18 +108,17 @@ class RequestState:
         def new_request_output(request_id: str) -> RequestOutput:
             return self._new_request_output(request_id, finished)
 
-        def append_completion_output(
-                request_output: RequestOutput) -> RequestOutput:
-            request_output.outputs.append(
-                self._new_completion_output(new_token_ids, finish_reason,
-                                            stop_reason))
-            return request_output
+        completion_output = self._new_completion_output(
+            new_token_ids, finish_reason, stop_reason)
 
         if self.parent_req is not None:
-            return self.parent_req.make_request_output(
-                final_only, new_request_output, append_completion_output)
+            return self.parent_req.make_request_output(final_only,
+                                                       completion_output,
+                                                       new_request_output)
 
-        return append_completion_output(new_request_output(self.request_id))
+        request_output = new_request_output(self.request_id)
+        request_output.outputs.append(completion_output)
+        return request_output
 
     def _new_request_output(
         self,

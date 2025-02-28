@@ -3,7 +3,7 @@
 from copy import copy
 from typing import Callable, Optional, Tuple, Union
 
-from vllm.outputs import RequestOutput
+from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 
@@ -92,8 +92,8 @@ class ParentRequest:
     def make_request_output(
         self,
         final_only: bool,
+        completion_output: CompletionOutput,
         new_request_output: Callable[[str], RequestOutput],
-        append_completion_output: Callable[[RequestOutput], RequestOutput],
     ) -> Optional[RequestOutput]:
         # Use an existing RequestOutput if we're aggregating
         request_output = self.output_aggregator
@@ -103,10 +103,10 @@ class ParentRequest:
             request_output = new_request_output(self.request_id)
 
         # Add a new completion
-        append_completion_output(request_output)
+        request_output.outputs.append(completion_output)
 
         # If not streaming, aggregate until all child requests complete
-        if (final_only and len(request_output.outputs) != self.n):
+        if final_only and len(request_output.outputs) != self.n:
             self.output_aggregator = request_output
             return None
 
