@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import enum
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
@@ -26,6 +26,8 @@ from vllm.v1.attention.backends.pallas import (PallasAttentionBackend,
 from vllm.v1.kv_cache_interface import (FullAttentionSpec, KVCacheConfig,
                                         KVCacheSpec)
 from vllm.v1.outputs import LogprobsTensors, ModelRunnerOutput
+from vllm.v1.sample.metadata import SamplingMetadata
+from vllm.v1.sample.sampler import Sampler
 from vllm.v1.utils import bind_kv_cache
 from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
 
@@ -67,6 +69,150 @@ class DecodeData:
     input_tokens: Optional[torch.Tensor] = None
     input_positions: Optional[torch.Tensor] = None
     attn_metadata: Optional[PallasMetadata] = None
+
+
+# TODO (NickLucche) keep in sync with SamplingMetadata until we can drop
+# this class and support most options.
+@dataclass
+class TPUSupportedSamplingMetadata:
+    # This class exposes a more xla-friendly interfaces, in particular
+    # all arguments should be traceable and no optionals are allowed,
+    # to avoid graph recompilation on Nones.
+    temperature: torch.Tensor
+
+    min_p: torch.Tensor
+    # Still too slow on forward_native!
+    top_k: torch.Tensor = None
+    top_p: torch.Tensor = None
+
+    # XLA-unfriendly control flow
+    all_greedy: bool = False
+    all_random: bool = False
+
+    # speculation not supported
+    spec_token_ids = None
+
+    # Generator not supported by xla
+    generators: Dict[int,
+                     torch.Generator] = field(default_factory=lambda: dict())
+
+    # unsupported, you need to return an extra tensor of static size BxV
+    max_num_logprobs = None
+
+    # TODO No penalties for now
+    no_penalties: bool = True
+    prompt_token_ids = None
+    frequency_penalties = None
+    presence_penalties = None
+    repetition_penalties = None
+    # should use tensor
+    output_token_ids: List[List[int]] = field(default_factory=lambda: list())
+
+    min_tokens = None  # impl is not vectorized
+
+    logit_bias: List[Optional[Dict[int, float]]] = field(
+        default_factory=lambda: list())
+
+    allowed_token_ids_mask = None
+
+    @classmethod
+    def from_sampling_metadata(
+            cls, metadata: SamplingMetadata, batch_size: int,
+            device: torch.device) -> "TPUSupportedSamplingMetadata":
+        metadata = cls._validate_sampling_metadata(metadata)
+        # NOTE we have to initialize default tensor-based params first and
+        # skip None values altogether to produce the same xla graph.
+        new_metadata = cls.get_default_sampling_params(batch_size, device)
+
+        supported_params = \
+            TPUSupportedSamplingMetadata._get_default_params_values()
+        # Copy `metadata` non-None values into `new_metadata`, while
+        # broadcasting tensor params to match sequence batch padding.
+        for p_name in supported_params:
+            old_val = getattr(metadata, p_name)
+            new_val = getattr(new_metadata, p_name)
+            # Branching in pre-processing will trigger re-compilation.
+            if isinstance(old_val,
+                          torch.Tensor) and old_val.numel() != batch_size:
+                # TODO not efficient, manage a tensor of compiled size B
+                # Handle padded batch.
+                new_val[:old_val.shape[0]] = old_val
+            elif isinstance(old_val, torch.Tensor):
+                # This is either one value for all batch, standardized to batch
+                # size, or B values.
+                new_val[:] = old_val
+            setattr(new_metadata, p_name, new_val)
+
+        xm.mark_step()
+        xm.wait_device_ops()
+        return new_metadata
+
+    @classmethod
+    def from_single_prefill_metadata(
+            cls, metadata: SamplingMetadata, prefill_idx: int,
+            device: torch.device) -> "TPUSupportedSamplingMetadata":
+        # TODO tmp constructor until ragged kernel is implemented for B=1 case.
+        metadata = cls._validate_sampling_metadata(metadata)
+        new_metadata = cls.get_default_sampling_params(1, device)
+
+        supported_params = \
+            TPUSupportedSamplingMetadata._get_default_params_values()
+        # Copy `metadata` non-None values into `new_metadata`.
+        for p_name in supported_params:
+            old_val = getattr(metadata, p_name)
+            new_val = getattr(new_metadata, p_name)
+            if isinstance(old_val, torch.Tensor) and old_val.numel() > 1:
+                # Select the right prefill metadata.
+                new_val[:] = old_val[prefill_idx]
+            elif isinstance(old_val, torch.Tensor):
+                # num_prefills==1 or one param value for whole batch
+                new_val[:] = old_val
+            setattr(new_metadata, p_name, new_val)
+        xm.mark_step()
+        xm.wait_device_ops()
+        return new_metadata
+
+    @classmethod
+    def get_default_sampling_params(
+            cls, batch_size: int,
+            device: torch.device) -> "TPUSupportedSamplingMetadata":
+        # As sampling happens on a single traced function, options
+        # are "disabled" by having them evaluate to an Identity op.
+        # Note that initialization is dependent on batch_size.
+        sampling_metadata_disable_value = \
+            TPUSupportedSamplingMetadata._get_default_params_values()
+        kwargs = dict()
+        for p_name, default_val in sampling_metadata_disable_value.items():
+            default_tensor = torch.full((batch_size, ),
+                                        default_val,
+                                        device=device)
+            kwargs[p_name] = default_tensor
+
+        return cls(**kwargs)
+
+    @staticmethod
+    def _validate_sampling_metadata(
+            sampling_metadata: SamplingMetadata) -> SamplingMetadata:
+        if sampling_metadata.all_greedy:
+            # Greedy sampling is always performed as long as temp is 0, but
+            # the control flow must be constant.
+            sampling_metadata.all_greedy = False
+            # TODO this is checked somewhere else already isn't it?
+            assert torch.count_nonzero(sampling_metadata.temperature) == 0
+        return sampling_metadata
+
+    @staticmethod
+    def _get_default_params_values():
+        return dict(
+            temperature=0.0,
+            min_p=0.0,
+            # strictly disabled for now
+            # top_k=-1,
+            # top_p=0.0,
+            # frequency_penalties=0.0,
+            # presence_penalties=0.0,
+            # repetition_penalties=0.0,
+        )
 
 
 class TPUModelRunner:
@@ -113,7 +259,7 @@ class TPUModelRunner:
         self.head_size = model_config.get_head_size()
         self.hidden_size = model_config.get_hidden_size()
 
-        self.model: Optional[nn.Module] = None
+        self.model: Optional[ModelWrapperV1] = None
 
         # Persistent batch.
         self.input_batch = InputBatch(
@@ -284,6 +430,9 @@ class TPUModelRunner:
                 req_data.new_block_ids)
             self.input_batch.block_table.append_row(req_index, start_index,
                                                     req_data.new_block_ids)
+        # Check if the batch has changed. If not, we can skip copying the
+        # sampling metadata from CPU to GPU.
+        batch_changed = len(removed_req_indices) > 0 or len(req_ids_to_add) > 0
 
         # Add the new or resumed requests to the persistent batch.
         # The smaller empty indices are filled first.
@@ -301,6 +450,9 @@ class TPUModelRunner:
         # Condense the batched states if there are empty indices.
         if removed_req_indices:
             self.input_batch.condense(removed_req_indices)
+
+        if batch_changed:
+            self.input_batch.refresh_sampling_metadata()
         return len(unscheduled_req_ids) > 0 or len(req_ids_to_add) > 0
 
     def swap_step(self):
@@ -597,6 +749,8 @@ class TPUModelRunner:
         num_decodes = len(pd_info.decode_req_ids)
         decode_data = None
         sampled_token_ids = [0] * self.input_batch.num_reqs
+        sampling_metadata = self.input_batch.get_sampling_metadata(
+            scheduler_output.scheduled_spec_decode_tokens)
 
         # Run each prompt individually
         is_first = True
@@ -609,6 +763,10 @@ class TPUModelRunner:
             num_scheduled_tokens = pd_info.prompt_scheduled_tokens[i]
             prompt_len = num_scheduled_tokens
             seq_len = req_state.num_computed_tokens + num_scheduled_tokens
+            # Select the portion of the sampling params corresponding to req i
+            prefill_sampling_meta = TPUSupportedSamplingMetadata\
+                .from_single_prefill_metadata(sampling_metadata,\
+                                              req_index, self.device)
 
             # Prepare first prompt
             if is_first:
@@ -622,7 +780,8 @@ class TPUModelRunner:
                 assert self.model is not None
                 selected_token_ids = self.model(prompt_data.input_tokens,
                                                 prompt_data.input_positions,
-                                                self.kv_caches)
+                                                self.kv_caches,
+                                                prefill_sampling_meta)
 
             # In parallel to TPU execution, prepare the next iteration
             if i < num_prompts - 1:
@@ -649,7 +808,10 @@ class TPUModelRunner:
 
         # Run decodes (a single batch)
         if num_decodes > 0:
-
+            decode_sampling_meta = TPUSupportedSamplingMetadata.\
+                from_sampling_metadata(sampling_metadata,
+                                       _get_padded_batch_size(num_decodes),
+                    self.device)
             # Prepare decode (if was not yet prepared)
             if decode_data is None:
                 decode_data = self._prepare_decode(pd_info.decode_req_ids)
@@ -660,8 +822,8 @@ class TPUModelRunner:
                 assert self.model is not None
                 selected_token_ids = self.model(decode_data.input_tokens,
                                                 decode_data.input_positions,
-                                                self.kv_caches)
-
+                                                self.kv_caches,
+                                                decode_sampling_meta)
             # Transfer sampled tokens from TPU to CPU
             decode_token_ids_cpu = selected_token_ids.cpu()
             # Convert to list
@@ -722,6 +884,7 @@ class TPUModelRunner:
         xm.mark_step()
         xm.wait_device_ops()
         model = ModelWrapperV1(model)
+        self.model = model
         self.model = torch.compile(model,
                                    backend="openxla",
                                    fullgraph=True,
@@ -828,15 +991,16 @@ class TPUModelRunner:
             torch._dynamo.mark_dynamic(attn_metadata.slot_mapping, 1)
         else:
             # Decode
-            torch._dynamo.mark_dynamic(token_ids, 0)
-            torch._dynamo.mark_dynamic(position_ids, 0)
             torch._dynamo.mark_dynamic(attn_metadata.slot_mapping, 0)
             torch._dynamo.mark_dynamic(attn_metadata.context_lens, 0)
             torch._dynamo.mark_dynamic(attn_metadata.block_tables, 0)
 
+        # To allow sampling, trace the forward with all supported sampling args
+        sampling_meta = TPUSupportedSamplingMetadata.\
+            get_default_sampling_params(num_tokens, self.device)
         with set_forward_context(attn_metadata, self.vllm_config, 0):
-            assert self.model is not None
-            self.model(token_ids, position_ids, kv_caches)
+            assert self.model
+            self.model(token_ids, position_ids, kv_caches, sampling_meta)
 
     def capture_model(self) -> None:
         """Compile the model."""
@@ -865,7 +1029,7 @@ class TPUModelRunner:
                     end - start)
 
         # Prefix prefill
-        if self.scheduler_config.enable_chunked_prefill:
+        if self.cache_config.enable_prefix_caching:
             logger.info("Compiling the model with different input shapes for "
                         "prefix prefill:")
             start = time.time()
@@ -955,22 +1119,27 @@ class ModelWrapperV1(nn.Module):
     def __init__(self, model: nn.Module):
         super().__init__()
         self.model = model
+        self.sampler = Sampler()
+
+    def sample(
+            self, logits: torch.Tensor,
+            sampling_metadata: TPUSupportedSamplingMetadata) -> torch.Tensor:
+        sampler_out = self.sampler(logits, sampling_metadata)
+        sampled_token_ids = sampler_out.sampled_token_ids
+        return sampled_token_ids.squeeze(dim=-1)
 
     def forward(
         self,
         token_ids: torch.Tensor,
         position_ids: torch.Tensor,
         kv_caches: List[Tuple[torch.Tensor, torch.Tensor]],
+        sampling_metadata: TPUSupportedSamplingMetadata,
     ) -> torch.Tensor:
         """Executes the forward pass of the model and samples the next token.
 
         Args:
             token_ids: The input token IDs of shape [batch_size, seq_len].
             position_ids: The input position IDs of shape [batch_size, seq_len].
-            input_lens: The actual input lengths of shape [batch_size].
-            t: The sampling temperature of shape [batch_size].
-            p: The top-p probability of shape [batch_size].
-            num_samples: Number of samples to draw from each logits vector.
             kv_caches: The key and value caches. They can be None during the
                 memory profiling at initialization.
         """
@@ -996,16 +1165,11 @@ class ModelWrapperV1(nn.Module):
             slot_mapping = slot_mapping.flatten()
             attn_metadata.slot_mapping = slot_mapping
 
-        assert self.model is not None
         hidden_states = self.model(token_ids, position_ids)
 
         hidden_states = hidden_states.flatten(0, 1)
         logits = self.model.compute_logits(hidden_states, None)
-
-        # Greedy sampling.
-        argmax_token_ids = torch.argmax(logits, dim=-1, keepdim=True)
-        argmax_token_ids = argmax_token_ids.squeeze(dim=-1)
-        return argmax_token_ids
+        return self.sample(logits, sampling_metadata)
 
 
 def swap_positions(b: InputBatch, id_1, id_2):
