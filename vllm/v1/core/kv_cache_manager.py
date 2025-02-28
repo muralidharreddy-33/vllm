@@ -70,6 +70,10 @@ class KVCacheManager:
         self.cached_block_hash_to_block: Dict[BlockHashType, Dict[
             int, KVCacheBlock]] = defaultdict(dict)
 
+        # NOTE: this is used in `self._get_cached_block` for better performance
+        self.cached_block_hash_to_block_get = \
+            self.cached_block_hash_to_block.get
+
         # Mapping from request ID to blocks to track the blocks allocated
         # for each request, so that we can free the blocks when the request
         # is finished.
@@ -309,6 +313,8 @@ class KVCacheManager:
 
         # Remove all hashes so that no new blocks will hit.
         self.cached_block_hash_to_block = defaultdict(dict)
+        self.cached_block_hash_to_block_get = \
+            self.cached_block_hash_to_block.get
 
         # Remove all hashes from all blocks.
         for block in self.block_pool:
@@ -432,10 +438,17 @@ class KVCacheManager:
         Returns:
             The cached block if it exists, or None.
         """
-        if block_hash in self.cached_block_hash_to_block:
-            first_block_id = list(
-                self.cached_block_hash_to_block[block_hash].keys())[0]
-            return self.cached_block_hash_to_block[block_hash][first_block_id]
+        # Equivalent to `self.cached_block_hash_to_block.get`
+        #   but a bit faster.
+        cached_block_dict = self.cached_block_hash_to_block_get(
+            block_hash, None)
+
+        if cached_block_dict is not None:
+            # Equivalent to `next(iter(cached_block_dict.values()))`
+            #   but a bit faster.
+            for v in cached_block_dict.values():
+                return v
+
         return None
 
     def _touch(self, blocks: List[KVCacheBlock]) -> None:
