@@ -237,13 +237,19 @@ from vllm.utils import async_tensor_h2d, cdiv, make_tensor_with_pad, round_down
 
 try:
     from vllm.vllm_flash_attn import flash_attn_varlen_func
+    is_vllm_fa = True
 except ImportError:
     # For rocm use upstream flash attention
     from flash_attn import flash_attn_varlen_func
+    is_vllm_fa = False
+
+from vllm.attention.ops.triton_flash_attention import triton_attention
 
 if TYPE_CHECKING:
     from vllm.worker.model_runner import (ModelInputForGPUBuilder,
                                           ModelInputForGPUWithSamplingMetadata)
+
+is_hip = current_platform.is_rocm()
 
 
 class MLACommonBackend(AttentionBackend):
@@ -1046,14 +1052,15 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
         self.q_proj = q_proj
         self.kv_b_proj = kv_b_proj
         self.o_proj = o_proj
-        self.vllm_flash_attn_version = get_flash_attn_version()
+        self.triton_fa_func = triton_attention
 
         # Handle the differences between the flash_attn_varlen from flash_attn
         # and the one from vllm_flash_attn. The former is used on RoCM and the
         # latter has an additional parameter to control FA2 vs FA3
-        self._flash_attn_varlen_func = flash_attn_varlen_func
-        if self._flash_attn_varlen_func is not None:
-            self._flash_attn_varlen_func = \
+        self.flash_attn_varlen_func = flash_attn_varlen_func
+        self.vllm_flash_attn_version = get_flash_attn_version()
+        if self.vllm_flash_attn_version is not None:
+            self.flash_attn_varlen_func = \
                 functools.partial(flash_attn_varlen_func,
                                   fa_version=self.vllm_flash_attn_version)
 
@@ -1065,13 +1072,46 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
             self.vllm_flash_attn_version == 3
             and current_platform.get_device_capability()[0] == 9)
 
-    def _flash_attn_varlen_diff_headdims(self, q, k, v, **kwargs):
+    def _flash_attn_varlen_diff_headdims(self,
+                                         q,
+                                         k,
+                                         v,
+                                         return_softmax_lse=False,
+                                         softmax_scale=None,
+                                         **kwargs):
         maybe_padded_v = v
         if self._pad_v:
             maybe_padded_v = torch.nn.functional.pad(
                 v, [0, q.shape[-1] - v.shape[-1]], value=0)
 
-        attn_out = self._flash_attn_varlen_func(q, k, maybe_padded_v, **kwargs)
+        if is_hip and envs.VLLM_USE_TRITON_FLASH_ATTN:
+            assert return_softmax_lse is False
+            attn_out = self.triton_fa_func(
+                q,
+                k,
+                maybe_padded_v,
+                sm_scale=softmax_scale,
+                **kwargs,
+            )
+        elif is_vllm_fa:
+            attn_out = self.flash_attn_varlen_func(
+                q=q,
+                k=k,
+                v=maybe_padded_v,
+                return_softmax_lse=return_softmax_lse,
+                sm_scale=softmax_scale,
+                **kwargs,
+            )
+        else:
+            # Use return_attn_probs instead of return_softmax_lse for RoCM
+            attn_out = self.flash_attn_varlen_func(
+                q=q,
+                k=k,
+                v=maybe_padded_v,
+                return_attn_probs=return_softmax_lse,
+                sm_scale=softmax_scale,
+                **kwargs,
+            )
 
         # Remain consistent with old `flash_attn_varlen_func` where there
         # is only one output tensor if `return_softmax_lse` is False.
@@ -1392,38 +1432,27 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
 
         k = torch.cat((k_nope, k_pe.expand((*k_nope.shape[:-1], -1))), dim=-1)
 
-        if has_context:
-            if not current_platform.is_cuda():
-                raise NotImplementedError(
-                    "Chunked Prefill for MLA is not currently supported on"
-                    "non-cuda platforms")
-            output = self._flash_attn_varlen_diff_headdims(
-                q=q,
-                k=k,
-                v=v,
-                cu_seqlens_q=prefill_metadata.query_start_loc,
-                cu_seqlens_k=prefill_metadata.query_start_loc,
-                max_seqlen_q=prefill_metadata.max_prefill_seq_len,
-                max_seqlen_k=prefill_metadata.max_prefill_seq_len,
-                softmax_scale=self.scale,
-                causal=True,
-                return_softmax_lse=True,
-            )
-        else:
-            output = self._flash_attn_varlen_diff_headdims(
-                q=q,
-                k=k,
-                v=v,
-                cu_seqlens_q=prefill_metadata.query_start_loc,
-                cu_seqlens_k=prefill_metadata.query_start_loc,
-                max_seqlen_q=prefill_metadata.max_prefill_seq_len,
-                max_seqlen_k=prefill_metadata.max_prefill_seq_len,
-                softmax_scale=self.scale,
-                causal=True,
-            )
+        if has_context and not current_platform.is_cuda():
+            raise NotImplementedError(
+                "Chunked Prefill for MLA is not currently supported on"
+                "non-cuda platforms")
+
+        output = self._flash_attn_varlen_diff_headdims(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=prefill_metadata.query_start_loc,
+            cu_seqlens_k=prefill_metadata.query_start_loc,
+            max_seqlen_q=prefill_metadata.max_prefill_seq_len,
+            max_seqlen_k=prefill_metadata.max_prefill_seq_len,
+            softmax_scale=self.scale,
+            causal=True,
+            return_softmax_lse=has_context,
+        )
 
         if has_context:
-            suffix_output, suffix_lse = output
+            # ROCm flash_attn_varlen_func will return 3 objects instead of 2
+            suffix_output, suffix_lse, *rest = output
             context_output, context_lse = self._compute_prefill_context( \
                 q, kv_c_and_k_pe_cache, attn_metadata)
 
