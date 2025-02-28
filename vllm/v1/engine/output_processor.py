@@ -115,12 +115,11 @@ class RequestState:
                                             stop_reason))
             return request_output
 
-        if self.parent_req is None:
-            return append_completion_output(new_request_output(
-                self.request_id))
-        else:
+        if self.parent_req is not None:
             return self.parent_req.make_request_output(
                 final_only, new_request_output, append_completion_output)
+
+        return append_completion_output(new_request_output(self.request_id))
 
     def _new_request_output(
         self,
