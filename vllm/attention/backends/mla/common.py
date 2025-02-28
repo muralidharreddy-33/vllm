@@ -1099,7 +1099,7 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
                 k=k,
                 v=maybe_padded_v,
                 return_softmax_lse=return_softmax_lse,
-                sm_scale=softmax_scale,
+                softmax_scale=softmax_scale,
                 **kwargs,
             )
         else:
@@ -1109,7 +1109,7 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
                 k=k,
                 v=maybe_padded_v,
                 return_attn_probs=return_softmax_lse,
-                sm_scale=softmax_scale,
+                softmax_scale=softmax_scale,
                 **kwargs,
             )
 
