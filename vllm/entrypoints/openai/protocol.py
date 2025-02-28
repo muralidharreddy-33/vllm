@@ -242,7 +242,6 @@ class ChatCompletionRequest(OpenAIBaseModel):
     user: Optional[str] = None
 
     # doc: begin-chat-completion-sampling-params
-    best_of: Optional[int] = None
     use_beam_search: bool = False
     top_k: Optional[int] = None
     min_p: Optional[float] = None
@@ -473,7 +472,6 @@ class ChatCompletionRequest(OpenAIBaseModel):
 
         return SamplingParams.from_optional(
             n=self.n,
-            best_of=self.best_of,
             presence_penalty=self.presence_penalty,
             frequency_penalty=self.frequency_penalty,
             repetition_penalty=repetition_penalty,
@@ -644,7 +642,6 @@ class CompletionRequest(OpenAIBaseModel):
     # https://platform.openai.com/docs/api-reference/completions/create
     model: Optional[str] = None
     prompt: Union[List[int], List[List[int]], str, List[str]]
-    best_of: Optional[int] = None
     echo: Optional[bool] = False
     frequency_penalty: Optional[float] = 0.0
     logit_bias: Optional[Dict[str, float]] = None
@@ -836,7 +833,6 @@ class CompletionRequest(OpenAIBaseModel):
 
         return SamplingParams.from_optional(
             n=self.n,
-            best_of=self.best_of,
             presence_penalty=self.presence_penalty,
             frequency_penalty=self.frequency_penalty,
             repetition_penalty=repetition_penalty,
