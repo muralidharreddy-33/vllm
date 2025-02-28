@@ -12,8 +12,14 @@ from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
                                               AttentionMetadata, AttentionType)
 from vllm.attention.backends.utils import (CommonAttentionState,
                                            CommonMetadataBuilder)
-from vllm.attention.ops.paged_attn import (PagedAttention,
-                                           PagedAttentionMetadata)
+
+if envs.VLLM_ROCM_USE_AITER_PAGED_ATTN:
+    from vllm.attention.ops.paged_attn_aiter import (PagedAttention,
+                                                     PagedAttentionMetadata)
+else:
+    from vllm.attention.ops.paged_attn import (PagedAttention,
+                                               PagedAttentionMetadata)
+
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
@@ -463,6 +469,7 @@ class ROCmFlashAttentionImpl(AttentionImpl):
         if blocksparse_params is not None:
             raise ValueError(
                 "ROCmFlashAttention does not support blocksparse attention.")
+        self.aiter_kv_scales_initialized = False
 
         if logits_soft_cap is None:
             # In flash-attn, setting logits_soft_cap as 0 means no soft cap.
@@ -607,6 +614,25 @@ class ROCmFlashAttentionImpl(AttentionImpl):
             value = value.view(-1, self.num_kv_heads, self.head_size)
         else:
             assert value is None
+
+        if (envs.VLLM_ROCM_USE_AITER_PAGED_ATTN
+                and kv_cache.dtype.itemsize == 1
+                and not self.aiter_kv_scales_initialized
+                and kv_cache.shape != torch.Size([0])):
+            num_blocks = kv_cache.shape[1]
+            block_size = kv_cache.shape[2] // (self.num_kv_heads *
+                                               self.head_size)
+            k_scale = torch.empty((self.num_kv_heads, num_blocks * block_size),
+                                  dtype=torch.float32,
+                                  device=kv_cache.device)
+            v_scale = torch.empty((self.num_kv_heads, num_blocks * block_size),
+                                  dtype=torch.float32,
+                                  device=kv_cache.device)
+            self.aiter_kv_scales_initialized = True
+            k_scale.fill_(layer._k_scale.item())
+            v_scale.fill_(layer._v_scale.item())
+            layer._k_scale = k_scale
+            layer._v_scale = v_scale
 
         if self.attn_type != AttentionType.ENCODER and kv_cache.numel() > 0:
             key_cache, value_cache = PagedAttention.split_kv_cache(
@@ -769,6 +795,29 @@ class ROCmFlashAttentionImpl(AttentionImpl):
             use_custom = _use_rocm_custom_paged_attention(
                 decode_query.dtype, head_size, block_size, gqa_ratio,
                 decode_meta.max_decode_seq_len)
+            if envs.VLLM_ROCM_USE_AITER_PAGED_ATTN:
+                out = output[num_prefill_tokens:]
+                PagedAttention.forward_decode(
+                    decode_query,
+                    key_cache,
+                    value_cache,
+                    decode_meta.block_tables
+                    if self.attn_type != AttentionType.ENCODER_DECODER else
+                    decode_meta.cross_block_tables,
+                    decode_meta.seq_lens_tensor
+                    if self.attn_type != AttentionType.ENCODER_DECODER else
+                    decode_meta.encoder_seq_lens_tensor,
+                    decode_meta.max_decode_seq_len
+                    if self.attn_type != AttentionType.ENCODER_DECODER else
+                    decode_meta.max_encoder_seq_len,
+                    self.kv_cache_dtype,
+                    self.num_kv_heads,
+                    self.scale,
+                    self.alibi_slopes,
+                    layer._k_scale,
+                    layer._v_scale,
+                    out=out)
+                return output.view(-1, self.num_heads * self.head_size)
             if use_custom:
                 max_seq_len = (decode_meta.max_decode_seq_len if self.attn_type
                                != AttentionType.ENCODER_DECODER else
