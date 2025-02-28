@@ -16,7 +16,7 @@ class ParentRequest:
     """
 
     request_id: str
-    params: Union[SamplingParams, PoolingParams]
+    sampling_params: SamplingParams
 
     # To aggregate child completions when not streaming
     output_aggregator: Optional[RequestOutput]
@@ -24,10 +24,10 @@ class ParentRequest:
     # To efficiently obtain child sampling params
     cached_child_sampling_params: Optional[SamplingParams]
 
-    def __init__(self, request_id: str, params: Union[SamplingParams,
-                                                      PoolingParams]) -> None:
+    def __init__(self, request_id: str,
+                 sampling_params: SamplingParams) -> None:
         self.request_id = request_id
-        self.params = params
+        self.sampling_params = sampling_params
 
         self.output_aggregator = None
         self.cached_child_sampling_params = None
@@ -58,13 +58,12 @@ class ParentRequest:
         Returns:
           Child `sampling_params` instance.
         """
-        assert isinstance(self.params, SamplingParams)
-        seed = self.params.seed
+        seed = self.sampling_params.seed
         if self.cached_child_sampling_params:
             # Reuse child sampling_params data structure
             return self.cached_child_sampling_params
         # Build child sampling_params
-        child_sampling_params = copy(self.params)
+        child_sampling_params = copy(self.sampling_params)
         child_sampling_params.n = 1
         if seed is None:
             # Cache child sampling_params for later reuse
@@ -88,8 +87,7 @@ class ParentRequest:
 
     @property
     def n(self) -> int:
-        assert isinstance(self.params, SamplingParams)
-        return self.params.n
+        return self.sampling_params.n
 
     def make_request_output(
         self,
