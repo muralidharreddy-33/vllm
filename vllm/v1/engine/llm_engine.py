@@ -154,7 +154,7 @@ class LLMEngine:
     ) -> None:
         # 1) Fan out child requests (for n>1)
         parent_req = ParentRequest.from_params(request_id, params)
-        n = params.n if isinstance(params, SamplingParams) else None
+        n = params.n if isinstance(params, SamplingParams) else 1
         for idx in range(n):
             if parent_req is not None:
                 request_id, params = parent_req.get_child_info(idx)
