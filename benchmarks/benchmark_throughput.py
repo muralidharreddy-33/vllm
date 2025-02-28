@@ -10,7 +10,10 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import uvloop
-from benchmark_dataset import RandomDataset, SampleRequest, ShareGPTDataset
+from benchmark_dataset import (VISION_ARENA_DATASET_PATH, BurstGPTDataset,
+                               HuggingFaceDataset, RandomDataset,
+                               SampleRequest, ShareGPTDataset, SonnetDataset,
+                               VisionArenaDataset)
 from benchmark_utils import convert_to_pytorch_benchmark_format, write_to_json
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
@@ -230,6 +233,53 @@ def save_to_pytorch_benchmark_format(args: argparse.Namespace,
         write_to_json(pt_file, pt_records)
 
 
+def get_requests(args, tokenizer):
+    # Common parameters for all dataset types.
+    common_kwargs = {
+        "tokenizer": tokenizer,
+        "enable_lora_tokenizer": args.enable_lora,
+        "lora_path": args.lora_path,
+        "max_loras": args.max_loras,
+        "num_requests": args.num_prompts,
+        "input_len": args.input_len,
+        "output_len": args.output_len,
+        "dataset_path": args.dataset,
+        "model": args.model,
+        "random_seed": args.seed,
+    }
+    sample_kwargs = {}
+
+    if args.dataset is None or args.dataset_name == "random":
+        dataset_cls = RandomDataset
+    elif args.dataset_name == "sharegpt":
+        dataset_cls = ShareGPTDataset
+    elif args.dataset_name == "sonnet":
+        if args.backend != "openai-chat":
+            assert tokenizer.chat_template or tokenizer.default_chat_template, (
+                "Tokenizer/model must have chat template for sonnet dataset.")
+            dataset_cls = SonnetDataset
+            common_kwargs["prefix_len"] = args.prefix_len
+            sample_kwargs["return_prompt_formatted"] = True
+        else:
+            raise NotImplementedError(
+                "openai-chat backend not supported for sonnet dataset.")
+    elif args.dataset_name == "burstgpt":
+        dataset_cls = BurstGPTDataset
+    elif args.dataset_name == "hf" and \
+        args.dataset == VISION_ARENA_DATASET_PATH and args.hf_subset is None:
+        dataset_cls = VisionArenaDataset
+        common_kwargs["dataset_split"] = args.hf_split
+        common_kwargs["dataset_subset"] = args.hf_subset
+    elif args.dataset_name == "hf":
+        dataset_cls = HuggingFaceDataset
+        common_kwargs["dataset_split"] = args.hf_split
+        common_kwargs["dataset_subset"] = args.hf_subset
+    else:
+        raise ValueError(f"Unknown dataset name: {args.dataset_name}")
+
+    return dataset_cls(**common_kwargs).sample(**sample_kwargs)
+
+
 def main(args: argparse.Namespace):
     print(args)
     random.seed(args.seed)
@@ -237,29 +287,7 @@ def main(args: argparse.Namespace):
     # Sample the requests.
     tokenizer = AutoTokenizer.from_pretrained(
         args.tokenizer, trust_remote_code=args.trust_remote_code)
-    if args.dataset is None:
-        # If no dataset is specified, we generate random requests.
-        requests = RandomDataset(tokenizer=tokenizer,
-                                 enable_lora_tokenizer=args.enable_lora,
-                                 lora_path=args.lora_path,
-                                 max_loras=args.max_loras,
-                                 num_requests=args.num_prompts,
-                                 input_len=args.input_len,
-                                 output_len=args.output_len,
-                                 dataset_path=args.dataset,
-                                 model=args.model).sample()
-    else:
-        # If a dataset is specified, we use it.
-        requests = ShareGPTDataset(tokenizer=tokenizer,
-                                   enable_lora_tokenizer=args.enable_lora,
-                                   lora_path=args.lora_path,
-                                   max_loras=args.max_loras,
-                                   num_requests=args.num_prompts,
-                                   input_len=args.input_len,
-                                   output_len=args.output_len,
-                                   dataset_path=args.dataset,
-                                   model=args.model).sample()
-
+    requests = get_requests(args, tokenizer)
     is_multi_modal = any(request.multi_modal_data is not None
                          for request in requests)
     if args.backend == "vllm":
@@ -316,6 +344,11 @@ if __name__ == "__main__":
                         type=str,
                         choices=["vllm", "hf", "mii"],
                         default="vllm")
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        choices=["sharegpt", "random", "sonnet", "burstgpt", "hf"],
+        default="sharegpt")
     parser.add_argument("--dataset",
                         type=str,
                         default=None,
@@ -363,6 +396,20 @@ if __name__ == "__main__":
         default=None,
         help="Path to the lora adapters to use. This can be an absolute path, "
         "a relative path, or a Hugging Face model identifier.")
+
+    parser.add_argument("--prefix-len",
+                        type=str,
+                        default=None,
+                        help="Number of prefix tokens per request")
+    # HF
+    parser.add_argument("--hf-subset",
+                        type=str,
+                        default=None,
+                        help="Subset of the HF dataset.")
+    parser.add_argument("--hf-split",
+                        type=str,
+                        default=None,
+                        help="Split of the HF dataset.")
 
     parser = AsyncEngineArgs.add_cli_args(parser)
     args = parser.parse_args()
