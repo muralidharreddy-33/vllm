@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib
 import random
 from copy import deepcopy
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from vllm.config import LoRAConfig
+from vllm.distributed import cleanup_dist_env_and_memory
 from vllm.lora.fully_sharded_layers import (
     ColumnParallelLinearWithShardedLoRA,
     MergedColumnParallelLinearWithShardedLoRA,
@@ -63,20 +65,21 @@ DEVICES = ([
 # stages, so we need to verify this. prefill stage(True) or decode stage(False)
 STAGES = [True, False]
 
-#@pytest.fixture(autouse=True)
-#def v1(run_with_both_engines_lora):
-#    # Simple autouse wrapper to run both engines for each test
-#    # This can be promoted up to conftest.py to run for every
-#    # test in a package
-#    cleanup_dist_env_and_memory(shutdown_ray=True)
-#
-#    # Reload punica_gpu as the kernels used are tied to engine type.
-#    from vllm.lora.punica_wrapper import punica_gpu
-#    importlib.reload(punica_gpu)
-#
-#    yield
-#
-#    cleanup_dist_env_and_memory(shutdown_ray=True)
+
+@pytest.fixture(autouse=True)
+def v1(run_with_both_engines_lora):
+    # Simple autouse wrapper to run both engines for each test
+    # This can be promoted up to conftest.py to run for every
+    # test in a package
+    cleanup_dist_env_and_memory(shutdown_ray=True)
+
+    # Reload punica_gpu as the kernels used are tied to engine type.
+    from vllm.lora.punica_wrapper import punica_gpu
+    importlib.reload(punica_gpu)
+
+    yield
+
+    cleanup_dist_env_and_memory(shutdown_ray=True)
 
 
 def get_random_id_to_index(num_loras: int,
@@ -843,6 +846,7 @@ def test_linear_parallel(dist_init, num_loras, orientation, fully_shard,
 
 
 @torch.inference_mode()
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("repeats", [1, 2, 3])
 @pytest.mark.parametrize("fully_shard", [True, False])
@@ -998,6 +1002,7 @@ def test_column_parallel_packed(dist_init, num_loras, repeats, fully_shard,
 
 
 @torch.inference_mode()
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 8])
 @pytest.mark.parametrize("device", ["cuda"])
 @pytest.mark.parametrize("scaling_factors", [(1.0, ), (4.0, ), (4.0, 8.0),
@@ -1094,6 +1099,7 @@ def test_rotary_embedding_long_context(dist_init, num_loras, device,
     torch.allclose(ref_k, actual_k)
 
 
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("tp_size", [1, 2, 4, 8])
 @pytest.mark.parametrize("seed", list(range(256)))
 def test_vocab_parallel_embedding_indices(tp_size, seed):
@@ -1174,6 +1180,7 @@ def test_vocab_parallel_embedding_indices(tp_size, seed):
         assert torch.all(reindexed_token_ids[vocab_size:] == -1)
 
 
+@pytest.mark.skip_v1
 def test_get_masked_input_and_mask():
     x = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
 
