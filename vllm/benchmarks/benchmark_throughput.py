@@ -11,12 +11,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import uvloop
-from benchmark_utils import convert_to_pytorch_benchmark_format, write_to_json
 from PIL import Image
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           PreTrainedTokenizerBase)
 
+from vllm.benchmarks.benchmark_utils import (
+    convert_to_pytorch_benchmark_format, write_to_json)
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args)
@@ -369,6 +370,103 @@ def save_to_pytorch_benchmark_format(args: argparse.Namespace,
         write_to_json(pt_file, pt_records)
 
 
+def add_options(parser: FlexibleArgumentParser) -> None:
+    """Add options to the parser for the benchmark throughput command."""
+    parser.add_argument("--backend",
+                        type=str,
+                        choices=["vllm", "hf", "mii"],
+                        default="vllm")
+    parser.add_argument("--dataset",
+                        type=str,
+                        default=None,
+                        help="Path to the dataset. The dataset is expected to "
+                        "be a json in form of List[Dict[..., conversations: "
+                        "List[Dict[..., value: <prompt_or_response>]]]]")
+    parser.add_argument("--input-len",
+                        type=int,
+                        default=None,
+                        help="Input prompt length for each request")
+    parser.add_argument("--output-len",
+                        type=int,
+                        default=None,
+                        help="Output length for each request. Overrides the "
+                        "output length from the dataset.")
+    parser.add_argument("--n",
+                        type=int,
+                        default=1,
+                        help="Number of generated sequences per prompt.")
+    parser.add_argument("--num-prompts",
+                        type=int,
+                        default=1000,
+                        help="Number of prompts to process.")
+    parser.add_argument("--hf-max-batch-size",
+                        type=int,
+                        default=None,
+                        help="Maximum batch size for HF backend.")
+    parser.add_argument(
+        '--output-json',
+        type=str,
+        default=None,
+        help='Path to save the throughput results in JSON format.')
+    parser.add_argument("--async-engine",
+                        action='store_true',
+                        default=False,
+                        help="Use vLLM async engine rather than LLM class.")
+    parser.add_argument("--disable-frontend-multiprocessing",
+                        action='store_true',
+                        default=False,
+                        help="Disable decoupled async engine frontend.")
+    # LoRA
+    parser.add_argument(
+        "--lora-path",
+        type=str,
+        default=None,
+        help="Path to the lora adapters to use. This can be an absolute path, "
+        "a relative path, or a Hugging Face model identifier.")
+
+    parser = AsyncEngineArgs.add_cli_args(parser)
+
+
+def validate_parsed_args(args: argparse.Namespace) -> None:
+    """Validate the parsed arguments for the benchmark throughput command."""
+    if args.tokenizer is None:
+        args.tokenizer = args.model
+    if args.dataset is None:
+        assert args.input_len is not None
+        assert args.output_len is not None
+    else:
+        assert args.input_len is None
+    if args.enable_lora:
+        assert args.lora_path is not None
+
+    if args.backend == "vllm":
+        if args.hf_max_batch_size is not None:
+            raise ValueError("HF max batch size is only for HF backend.")
+    elif args.backend == "hf":
+        if args.hf_max_batch_size is None:
+            raise ValueError("HF max batch size is required for HF backend.")
+        if args.quantization is not None:
+            raise ValueError("Quantization is only for vLLM backend.")
+        if args.enable_lora is not None:
+            raise ValueError("LoRA benchmarking is only supported for vLLM"
+                             " backend")
+    elif args.backend == "mii":
+        if args.dtype != "auto":
+            raise ValueError("dtype must be auto for MII backend.")
+        if args.n != 1:
+            raise ValueError("n must be 1 for MII backend.")
+        if args.quantization is not None:
+            raise ValueError("Quantization is only for vLLM backend.")
+        if args.hf_max_batch_size is not None:
+            raise ValueError("HF max batch size is only for HF backend.")
+        if args.tokenizer != args.model:
+            raise ValueError("Tokenizer must be the same as the model for MII "
+                             "backend.")
+        if args.enable_lora is not None:
+            raise ValueError("LoRA benchmarking is only supported for vLLM"
+                             " backend")
+
+
 def main(args: argparse.Namespace):
     print(args)
     random.seed(args.seed)
@@ -471,94 +569,7 @@ def main(args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = FlexibleArgumentParser(description="Benchmark the throughput.")
-    parser.add_argument("--backend",
-                        type=str,
-                        choices=["vllm", "hf", "mii"],
-                        default="vllm")
-    parser.add_argument("--dataset",
-                        type=str,
-                        default=None,
-                        help="Path to the dataset. The dataset is expected to "
-                        "be a json in form of List[Dict[..., conversations: "
-                        "List[Dict[..., value: <prompt_or_response>]]]]")
-    parser.add_argument("--input-len",
-                        type=int,
-                        default=None,
-                        help="Input prompt length for each request")
-    parser.add_argument("--output-len",
-                        type=int,
-                        default=None,
-                        help="Output length for each request. Overrides the "
-                        "output length from the dataset.")
-    parser.add_argument("--n",
-                        type=int,
-                        default=1,
-                        help="Number of generated sequences per prompt.")
-    parser.add_argument("--num-prompts",
-                        type=int,
-                        default=1000,
-                        help="Number of prompts to process.")
-    parser.add_argument("--hf-max-batch-size",
-                        type=int,
-                        default=None,
-                        help="Maximum batch size for HF backend.")
-    parser.add_argument(
-        '--output-json',
-        type=str,
-        default=None,
-        help='Path to save the throughput results in JSON format.')
-    parser.add_argument("--async-engine",
-                        action='store_true',
-                        default=False,
-                        help="Use vLLM async engine rather than LLM class.")
-    parser.add_argument("--disable-frontend-multiprocessing",
-                        action='store_true',
-                        default=False,
-                        help="Disable decoupled async engine frontend.")
-    # LoRA
-    parser.add_argument(
-        "--lora-path",
-        type=str,
-        default=None,
-        help="Path to the lora adapters to use. This can be an absolute path, "
-        "a relative path, or a Hugging Face model identifier.")
-
-    parser = AsyncEngineArgs.add_cli_args(parser)
+    add_options(parser)
     args = parser.parse_args()
-    if args.tokenizer is None:
-        args.tokenizer = args.model
-    if args.dataset is None:
-        assert args.input_len is not None
-        assert args.output_len is not None
-    else:
-        assert args.input_len is None
-    if args.enable_lora:
-        assert args.lora_path is not None
-
-    if args.backend == "vllm":
-        if args.hf_max_batch_size is not None:
-            raise ValueError("HF max batch size is only for HF backend.")
-    elif args.backend == "hf":
-        if args.hf_max_batch_size is None:
-            raise ValueError("HF max batch size is required for HF backend.")
-        if args.quantization is not None:
-            raise ValueError("Quantization is only for vLLM backend.")
-        if args.enable_lora is not None:
-            raise ValueError("LoRA benchmarking is only supported for vLLM"
-                             " backend")
-    elif args.backend == "mii":
-        if args.dtype != "auto":
-            raise ValueError("dtype must be auto for MII backend.")
-        if args.n != 1:
-            raise ValueError("n must be 1 for MII backend.")
-        if args.quantization is not None:
-            raise ValueError("Quantization is only for vLLM backend.")
-        if args.hf_max_batch_size is not None:
-            raise ValueError("HF max batch size is only for HF backend.")
-        if args.tokenizer != args.model:
-            raise ValueError("Tokenizer must be the same as the model for MII "
-                             "backend.")
-        if args.enable_lora is not None:
-            raise ValueError("LoRA benchmarking is only supported for vLLM"
-                             " backend")
+    validate_parsed_args(args)
     main(args)

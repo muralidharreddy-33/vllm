@@ -39,12 +39,14 @@ from typing import Any, AsyncGenerator, Collection, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from backend_request_func import (ASYNC_REQUEST_FUNCS, RequestFuncInput,
-                                  RequestFuncOutput)
 from datasets import load_dataset
 from PIL.Image import Image
 from tqdm.asyncio import tqdm
 from transformers import PreTrainedTokenizerBase
+
+from vllm.benchmarks.backend_request_func import (ASYNC_REQUEST_FUNCS,
+                                                  RequestFuncInput,
+                                                  RequestFuncOutput)
 
 try:
     from vllm.transformers_utils.tokenizer import get_tokenizer
@@ -56,7 +58,8 @@ try:
 except ImportError:
     from argparse import ArgumentParser as FlexibleArgumentParser
 
-from benchmark_utils import convert_to_pytorch_benchmark_format, write_to_json
+from vllm.benchmarks.benchmark_utils import (
+    convert_to_pytorch_benchmark_format, write_to_json)
 
 MILLISECONDS_TO_SECONDS_CONVERSION = 1000
 
@@ -1019,9 +1022,8 @@ def main(args: argparse.Namespace):
         save_to_pytorch_benchmark_format(args, result_json, file_name)
 
 
-if __name__ == "__main__":
-    parser = FlexibleArgumentParser(
-        description="Benchmark the online serving throughput.")
+def add_options(parser: FlexibleArgumentParser):
+    """Add options to the argument parser for the benchmark serving command."""
     parser.add_argument(
         "--backend",
         type=str,
@@ -1310,5 +1312,10 @@ if __name__ == "__main__":
                         "launching the server. For each request, the "
                         "script chooses a LoRA module at random.")
 
+
+if __name__ == "__main__":
+    parser = FlexibleArgumentParser(
+        description="Benchmark the online serving throughput.")
+    add_options(parser)
     args = parser.parse_args()
     main(args)
