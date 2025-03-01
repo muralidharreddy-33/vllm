@@ -9,10 +9,10 @@ from vllm.utils import FlexibleArgumentParser
 
 
 class BenchmarkThroughputSubcommand(CLISubcommand):
-    """ The `benchmark-throughput` subcommand for the vLLM CLI. """
+    """ The `throughput` subcommand for the vllm bench. """
 
     def __init__(self):
-        self.name = "benchmark-throughput"
+        self.name = "throughput"
         super().__init__()
 
     @staticmethod
@@ -25,10 +25,9 @@ class BenchmarkThroughputSubcommand(CLISubcommand):
     def subparser_init(
             self,
             subparsers: argparse._SubParsersAction) -> FlexibleArgumentParser:
-        parser = subparsers.add_parser(
-            "benchmark-throughput",
-            help="Benchmark the throughput.",
-            usage="vllm benchmark-throughput [options]")
+        parser = subparsers.add_parser("throughput",
+                                       help="Benchmark the throughput.",
+                                       usage="vllm bench throughput [options]")
         add_options(parser)
         return parser
 

@@ -8,10 +8,10 @@ from vllm.utils import FlexibleArgumentParser
 
 
 class BenchmarkServingSubcommand(CLISubcommand):
-    """ The `benchmark-serving` subcommand for the vLLM CLI. """
+    """ The `serving` subcommand for vllm bench. """
 
     def __init__(self):
-        self.name = "benchmark-serving"
+        self.name = "serving"
         super().__init__()
 
     @staticmethod
@@ -22,9 +22,9 @@ class BenchmarkServingSubcommand(CLISubcommand):
             self,
             subparsers: argparse._SubParsersAction) -> FlexibleArgumentParser:
         parser = subparsers.add_parser(
-            "benchmark-serving",
+            "serving",
             help="Benchmark the online serving throughput.",
-            usage="vllm benchmark-serving [options]")
+            usage="vllm bench serving [options]")
         add_options(parser)
         return parser
 

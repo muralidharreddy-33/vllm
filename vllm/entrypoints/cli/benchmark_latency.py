@@ -8,10 +8,10 @@ from vllm.utils import FlexibleArgumentParser
 
 
 class BenchmarkLatencySubcommand(CLISubcommand):
-    """ The `benchmark-latency` subcommand for the vLLM CLI. """
+    """ The `latency` subcommand for the vllm bench. """
 
     def __init__(self):
-        self.name = "benchmark-latency"
+        self.name = "latency"
         super().__init__()
 
     @staticmethod
@@ -22,11 +22,11 @@ class BenchmarkLatencySubcommand(CLISubcommand):
             self,
             subparsers: argparse._SubParsersAction) -> FlexibleArgumentParser:
         parser = subparsers.add_parser(
-            "benchmark-latency",
+            "latency",
             help=
             "Benchmark the latency of processing a single batch of requests "
             "till completion.",
-            usage="vllm benchmark-latency [options]")
+            usage="vllm bench latency [options]")
         add_options(parser)
         return parser
 
