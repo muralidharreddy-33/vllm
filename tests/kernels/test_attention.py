@@ -25,6 +25,7 @@ MAX_SEQ_LEN = get_max_shared_memory_bytes() // FLOAT32_BYTES - 512
 # Reduce NUM_BLOCKS when it happens.
 NUM_BLOCKS = 4321  # Arbitrary values for testing
 PARTITION_SIZE = 512
+PARTITION_SIZE_ROCM = 256
 # flshattF and tritonflashattF supported: {torch.float16, torch.bfloat16}
 DTYPES = [
     torch.half, torch.bfloat16, torch.float
@@ -146,6 +147,18 @@ def test_paged_attention(
             or (version == "rocm" and head_size not in (64, 128))):
         pytest.skip()
 
+    is_rocm_navi = False
+    if current_platform.is_rocm():
+        is_rocm_navi = "gfx1" in torch.cuda.get_device_properties(
+            "cuda").gcnArchName
+
+    if (version == "rocm" and is_rocm_navi
+            and (kv_cache_dtype == "fp8" or head_size != 128
+                 or block_size != 16 or use_alibi)):
+        pytest.skip()
+
+    global PARTITION_SIZE
+
     current_platform.seed_everything(seed)
     torch.set_default_device(device)
     scale = float(1.0 / (head_size**0.5))
@@ -214,6 +227,9 @@ def test_paged_attention(
                       and block_size == BLOCK_SIZES[0]))
 
     elif version in ("v2", "rocm"):
+        if current_platform.is_rocm() and version == "rocm":
+            PARTITION_SIZE = PARTITION_SIZE_ROCM
+
         num_partitions = ((max_seq_len + PARTITION_SIZE - 1) // PARTITION_SIZE)
         assert PARTITION_SIZE % block_size == 0
         num_seqs, num_heads, head_size = output.shape
@@ -274,13 +290,14 @@ def test_paged_attention(
                 kv_cache_dtype,
                 k_scale,
                 v_scale,
+                is_rocm_navi,
             )
 
             opcheck(torch.ops._rocm_C.paged_attention,
                     (output, exp_sums, max_logits, tmp_output, query,
                      key_cache, value_cache, num_kv_heads, scale, block_tables,
                      seq_lens, block_size, max_seq_len, alibi_slopes,
-                     kv_cache_dtype, k_scale, v_scale),
+                     kv_cache_dtype, k_scale, v_scale, is_rocm_navi),
                     cond=(head_size == HEAD_SIZES[0]
                           and block_size == BLOCK_SIZES[0]))
 
