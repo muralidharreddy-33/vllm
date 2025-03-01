@@ -229,21 +229,23 @@ class RandomDataset(BenchmarkDataset):
 
     def __init__(
         self,
-        prefix_len: Optional[int] = None,
-        range_ratio: Optional[float] = None,
+        prefix_len: Optional[int] = 0,
+        range_ratio: Optional[float] = 1.0,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        assert (self.input_len is not None and self.output_len is not None
-                ), "input_len and output_len must be set for RandomDataset"
-        self.prefix_len = prefix_len
-        self.range_ratio = range_ratio
+        assert self.input_len is not None and self.output_len is not None, \
+            "input_len and output_len must be set for RandomDataset"
+        self.prefix_len = prefix_len if prefix_len is not None \
+            else (print("prefix_len not provided, defaulting to 0") or 0)
+        self.range_ratio = range_ratio if range_ratio is not None \
+            else (print("range_ratio not provided, defaulting to 1.0") or 1)
 
     def load_data(self) -> None:
         # No data loading needed for RandomDataset.
         pass
 
-    def sample_serving(self) -> List:
+    def sample(self, for_online_benchmark: bool = False) -> List:
         assert (
             self.range_ratio is not None and self.prefix_len is not None
         ), "range_ratio and prefix_len must be set for RandomDataset when " \
@@ -279,44 +281,6 @@ class RandomDataset(BenchmarkDataset):
                     int(output_lens[i]),
                     mm_content=None,
                     lora_request=None,
-                    for_online_benchmark=True,
-                ))
-        return requests
-
-    def sample(self, for_online_benchmark: bool = False) -> List:
-        requests = []
-        for _ in range(self.num_requests):
-            lora_request, tokenizer = self.get_random_lora_request()
-
-            vocab_size = self.tokenizer.vocab_size
-            candidate_ids = [
-                random.randint(0, vocab_size - 1)
-                for _ in range(self.input_len)
-            ]
-            candidate_prompt = tokenizer.decode(candidate_ids)
-
-            # Adjust prompt length to match input_len
-            for _ in range(5):
-                tokenized_len = len(tokenizer.encode(candidate_prompt))
-                if tokenized_len == self.input_len:
-                    break
-                diff = self.input_len - tokenized_len
-                if diff > 0:
-                    candidate_ids += [
-                        random.randint(100, vocab_size - 100)
-                        for _ in range(diff)
-                    ]
-                else:
-                    candidate_ids = candidate_ids[:diff]
-                candidate_prompt = tokenizer.decode(candidate_ids)
-
-            requests.append(
-                self.create_sample(
-                    candidate_prompt,
-                    self.input_len,
-                    self.output_len,
-                    mm_content=None,
-                    lora_request=lora_request,
                     for_online_benchmark=for_online_benchmark,
                 ))
         return requests
