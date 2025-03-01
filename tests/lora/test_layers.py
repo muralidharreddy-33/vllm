@@ -231,6 +231,7 @@ def check_punica_wrapper(punica_wrapper) -> bool:
 
 
 @torch.inference_mode()
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("vocab_size", [512, 32000, 64000, 128000])
@@ -335,6 +336,7 @@ def test_embeddings(dist_init, num_loras, device, vocab_size, stage) -> None:
 @torch.inference_mode()
 # @pytest.mark.skip(
 #     reason="Fails when loras are in any slot other than the first.")
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("vocab_size", [512, 32000, 64000, 128000])
@@ -474,6 +476,7 @@ def test_embeddings_with_new_embeddings(dist_init, num_loras, device,
 
 
 @torch.inference_mode()
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("vocab_size", [512, 32000, 64000, 256512])
@@ -608,6 +611,7 @@ def test_lm_head_logits_processor(dist_init, num_loras, device, vocab_size,
 
 
 @torch.inference_mode()
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("stage", STAGES)
@@ -721,6 +725,7 @@ def test_linear_replicated(dist_init, num_loras, device, stage,
 
 
 @torch.inference_mode()
+@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("orientation", ["row", "column"])
 @pytest.mark.parametrize("fully_shard", [True, False])
@@ -846,7 +851,6 @@ def test_linear_parallel(dist_init, num_loras, orientation, fully_shard,
 
 
 @torch.inference_mode()
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("repeats", [1, 2, 3])
 @pytest.mark.parametrize("fully_shard", [True, False])
@@ -1002,7 +1006,6 @@ def test_column_parallel_packed(dist_init, num_loras, repeats, fully_shard,
 
 
 @torch.inference_mode()
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 8])
 @pytest.mark.parametrize("device", ["cuda"])
 @pytest.mark.parametrize("scaling_factors", [(1.0, ), (4.0, ), (4.0, 8.0),
@@ -1099,7 +1102,6 @@ def test_rotary_embedding_long_context(dist_init, num_loras, device,
     torch.allclose(ref_k, actual_k)
 
 
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("tp_size", [1, 2, 4, 8])
 @pytest.mark.parametrize("seed", list(range(256)))
 def test_vocab_parallel_embedding_indices(tp_size, seed):
@@ -1180,7 +1182,6 @@ def test_vocab_parallel_embedding_indices(tp_size, seed):
         assert torch.all(reindexed_token_ids[vocab_size:] == -1)
 
 
-@pytest.mark.skip_v1
 def test_get_masked_input_and_mask():
     x = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
 
