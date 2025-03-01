@@ -65,7 +65,7 @@ def test_phi2_lora(phi2_lora_files):
     # We enable enforce_eager=True here to reduce VRAM usage for lora-test CI,
     # Otherwise, the lora-test will fail due to CUDA OOM.
     llm = vllm.LLM(MODEL_PATH,
-                   max_model_len=1024,
+                   max_model_len=512,
                    enable_lora=True,
                    max_loras=2,
                    enforce_eager=True,

@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from vllm.config import LoRAConfig
+from vllm.distributed import cleanup_dist_env_and_memory
 from vllm.lora.fully_sharded_layers import (
     ColumnParallelLinearWithShardedLoRA,
     MergedColumnParallelLinearWithShardedLoRA,
@@ -70,13 +71,15 @@ def v1(run_with_both_engines_lora):
     # Simple autouse wrapper to run both engines for each test
     # This can be promoted up to conftest.py to run for every
     # test in a package
-
-    # Release any memory before runs. The CI OOMs without this.
-    torch.cuda.empty_cache()
+    cleanup_dist_env_and_memory(shutdown_ray=True)
 
     # Reload punica_gpu as the kernels used are tied to engine type.
     from vllm.lora.punica_wrapper import punica_gpu
     importlib.reload(punica_gpu)
+
+    yield
+
+    cleanup_dist_env_and_memory(shutdown_ray=True)
 
 
 def get_random_id_to_index(num_loras: int,
