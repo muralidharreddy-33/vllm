@@ -433,13 +433,12 @@ class SonnetDataset(BenchmarkDataset):
                                          k=num_input_lines - num_prefix_lines)
             prompt = f"{base_prompt}{''.join(prefix_lines + extra_lines)}"
             msg = [{"role": "user", "content": prompt}]
-            if return_prompt_formatted:
-                prompt = self.tokenizer.apply_chat_template(
-                    msg, add_generation_prompt=True, tokenize=False)
-            prompt_len = len(self.tokenizer(prompt).input_ids)
+            prompt_formatted = self.tokenizer.apply_chat_template(
+                msg, add_generation_prompt=True, tokenize=False)
+            prompt_len = len(self.tokenizer(prompt_formatted).input_ids)
             samples.append(
                 self.create_sample(
-                    prompt,
+                    prompt_formatted if return_prompt_formatted else prompt,
                     prompt_len,
                     self.output_len,
                     mm_content=None,
