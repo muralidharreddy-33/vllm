@@ -231,7 +231,6 @@ def check_punica_wrapper(punica_wrapper) -> bool:
 
 
 @torch.inference_mode()
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("vocab_size", [512, 32000, 64000, 128000])
@@ -336,7 +335,6 @@ def test_embeddings(dist_init, num_loras, device, vocab_size, stage) -> None:
 @torch.inference_mode()
 # @pytest.mark.skip(
 #     reason="Fails when loras are in any slot other than the first.")
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("vocab_size", [512, 32000, 64000, 128000])
@@ -476,7 +474,6 @@ def test_embeddings_with_new_embeddings(dist_init, num_loras, device,
 
 
 @torch.inference_mode()
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("vocab_size", [512, 32000, 64000, 256512])
@@ -611,7 +608,6 @@ def test_lm_head_logits_processor(dist_init, num_loras, device, vocab_size,
 
 
 @torch.inference_mode()
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("stage", STAGES)
@@ -725,7 +721,6 @@ def test_linear_replicated(dist_init, num_loras, device, stage,
 
 
 @torch.inference_mode()
-@pytest.mark.skip_v1
 @pytest.mark.parametrize("num_loras", [1, 2, 4, 8])
 @pytest.mark.parametrize("orientation", ["row", "column"])
 @pytest.mark.parametrize("fully_shard", [True, False])
