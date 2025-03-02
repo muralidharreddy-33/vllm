@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib
 import random
 from copy import deepcopy
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from vllm.config import LoRAConfig
+from vllm.distributed import cleanup_dist_env_and_memory
 from vllm.lora.fully_sharded_layers import (
     ColumnParallelLinearWithShardedLoRA,
     MergedColumnParallelLinearWithShardedLoRA,
@@ -62,6 +64,22 @@ DEVICES = ([
 #For GPU, we will launch different triton kernels between the prefill and decode
 # stages, so we need to verify this. prefill stage(True) or decode stage(False)
 STAGES = [True, False]
+
+
+@pytest.fixture(autouse=True)
+def v1(run_with_both_engines_lora):
+    # Simple autouse wrapper to run both engines for each test
+    # This can be promoted up to conftest.py to run for every
+    # test in a package
+    cleanup_dist_env_and_memory(shutdown_ray=True)
+
+    # Reload punica_gpu as the kernels used are tied to engine type.
+    from vllm.lora.punica_wrapper import punica_gpu
+    importlib.reload(punica_gpu)
+
+    yield
+
+    cleanup_dist_env_and_memory(shutdown_ray=True)
 
 
 def get_random_id_to_index(num_loras: int,
@@ -226,7 +244,7 @@ def test_embeddings(dist_init, num_loras, device, vocab_size, stage) -> None:
 
     torch.set_default_device(device)
     max_loras = 8
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
     assert check_punica_wrapper(punica_wrapper)
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
@@ -329,7 +347,7 @@ def test_embeddings_with_new_embeddings(dist_init, num_loras, device,
 
     torch.set_default_device(device)
     max_loras = 8
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
     assert check_punica_wrapper(punica_wrapper)
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
@@ -468,7 +486,7 @@ def test_lm_head_logits_processor(dist_init, num_loras, device, vocab_size,
 
     torch.set_default_device(device)
     max_loras = 8
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
     assert check_punica_wrapper(punica_wrapper)
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
@@ -600,10 +618,10 @@ def test_linear_replicated(dist_init, num_loras, device, stage,
     if current_platform.is_cuda_alike():
         torch.cuda.set_device(device)
 
-    torch.set_default_device(device)
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
-    assert check_punica_wrapper(punica_wrapper)
     max_loras = 8
+    torch.set_default_device(device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
+    assert check_punica_wrapper(punica_wrapper)
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
                              lora_dtype=torch.float16,
@@ -715,10 +733,10 @@ def test_linear_parallel(dist_init, num_loras, orientation, fully_shard,
     if current_platform.is_cuda_alike():
         torch.cuda.set_device(device)
 
-    torch.set_default_device(device)
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
-    assert check_punica_wrapper(punica_wrapper)
     max_loras = 8
+    torch.set_default_device(device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
+    assert check_punica_wrapper(punica_wrapper)
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
                              fully_sharded_loras=fully_shard,
@@ -840,10 +858,10 @@ def test_column_parallel_packed(dist_init, num_loras, repeats, fully_shard,
     if current_platform.is_cuda_alike():
         torch.cuda.set_device(device)
 
-    torch.set_default_device(device)
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
-    assert check_punica_wrapper(punica_wrapper)
     max_loras = 8
+    torch.set_default_device(device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
+    assert check_punica_wrapper(punica_wrapper)
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
                              fully_sharded_loras=fully_shard,
@@ -999,12 +1017,12 @@ def test_rotary_embedding_long_context(dist_init, num_loras, device,
                                        is_neox_style, rotary_dim, head_size,
                                        seq_len) -> None:
     dtype = torch.float16
+    max_loras = 8
     seed = 0
     current_platform.seed_everything(seed)
     torch.set_default_device(device)
-    punica_wrapper = get_punica_wrapper(8192, 256, device)
+    punica_wrapper = get_punica_wrapper(8192, 256, device, max_loras=max_loras)
     assert check_punica_wrapper(punica_wrapper)
-    max_loras = 8
     lora_config = LoRAConfig(max_loras=max_loras,
                              max_lora_rank=8,
                              long_lora_scaling_factors=scaling_factors,
