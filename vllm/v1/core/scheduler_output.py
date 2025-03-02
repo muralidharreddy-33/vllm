@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from vllm.lora.request import LoRARequest
     from vllm.multimodal import MultiModalKwargs
     from vllm.multimodal.base import PlaceholderRange
@@ -111,3 +113,9 @@ class SchedulerOutput:
     # List of (req_id, encoder_input_index) tuples.
     # Used to free the encoder cache.
     free_encoder_input_ids: List[Tuple[str, int]]
+
+    # Dict of request ids to their index within the batch
+    # for filling the next token bitmask
+    guided_decoding_request_ids: Dict[str, int]
+    # the bitmask for the whole batch
+    grammar_bitmask: Optional["np.ndarray"]

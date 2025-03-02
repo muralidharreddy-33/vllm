@@ -28,6 +28,7 @@ from vllm.utils import (STR_DTYPE_TO_TORCH_DTYPE, DeviceMemoryProfiler,
 from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.v1.core.encoder_cache_manager import compute_encoder_budget
 from vllm.v1.engine.mm_input_cache import MMInputCacheClient
+from vllm.v1.guided_decoding import apply_bitmask
 from vllm.v1.kv_cache_interface import (FullAttentionSpec, KVCacheConfig,
                                         KVCacheSpec)
 from vllm.v1.outputs import LogprobsTensors, ModelRunnerOutput
@@ -942,6 +943,44 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         sample_hidden_states = hidden_states[logits_indices]
         logits = self.model.compute_logits(sample_hidden_states, None)
 
+        # Apply guided decoding bitmasks if present
+        grammar_bitmask = scheduler_output.grammar_bitmask
+        if grammar_bitmask is not None:
+            grammar_bitmask = torch.from_numpy(grammar_bitmask)
+            # We receive the guided decoding bitmask from the scheduler, but the
+            # indices of the requests in the batch may not match the indices of
+            # the bitmask since the scheduler doesn't know how the gpu runner is
+            # ordering the requests in the batch. We need to sort the bitmask to
+            # match the order of the requests used here.
+            req_id_indices: Dict[str, int] = {}
+            indices_match = True
+            for req_id in self.input_batch.req_ids:
+                if req_id not in scheduler_output.guided_decoding_request_ids:
+                    # not a guided decoding request
+                    continue
+                batch_index = self.input_batch.req_id_to_index[req_id]
+                if batch_index != scheduler_output.guided_decoding_request_ids[
+                        req_id]:
+                    indices_match = False
+                req_id_indices[req_id] = batch_index
+
+            sorted_bitmask: Optional[torch.Tensor] = None
+            if not indices_match:
+                # Sort the bitmask to match the order of the requests
+                sorted_bitmask = torch.zeros_like(grammar_bitmask)
+                for req_id, batch_index in req_id_indices.items():
+                    orig_index = scheduler_output.guided_decoding_request_ids[
+                        req_id]
+                    sorted_bitmask[batch_index] = grammar_bitmask[orig_index]
+                grammar_bitmask = sorted_bitmask
+
+            # TODO: compatibility with spec decode
+            apply_bitmask(
+                logits,
+                grammar_bitmask.to(self.device, non_blocking=True),
+                list(req_id_indices.values()),
+            )
+
         # Sample the next token and get logprobs if needed.
         sampling_metadata = self.input_batch.sampling_metadata
         if not self.use_spec_decode:
@@ -1357,7 +1396,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         """
         Initialize KV cache based on `kv_cache_config`.
         Args:
-            kv_cache_config: Configuration for the KV cache, including the KV 
+            kv_cache_config: Configuration for the KV cache, including the KV
             cache size of each layer
         """
         if len(kv_cache_config.groups) > 1:
@@ -1389,10 +1428,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def get_kv_cache_spec(self) -> KVCacheSpec:
         """
-        Generates the KVCacheSpec by parsing the kv cache format from each 
+        Generates the KVCacheSpec by parsing the kv cache format from each
         Attention module in the static forward context.
         Returns:
-            KVCacheSpec: A dictionary mapping layer names to their KV cache 
+            KVCacheSpec: A dictionary mapping layer names to their KV cache
             format. Layers that do not need KV cache are not included.
         """
 

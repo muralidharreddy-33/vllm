@@ -2,7 +2,8 @@
 
 import time
 from collections import deque
-from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import (TYPE_CHECKING, Deque, Dict, Iterable, List, Optional, Set,
+                    Tuple, Union)
 
 from vllm.config import (CacheConfig, LoRAConfig, ModelConfig, SchedulerConfig,
                          SpeculativeConfig)
@@ -14,9 +15,13 @@ from vllm.v1.core.scheduler_output import (CachedRequestData, NewRequestData,
                                            SchedulerOutput)
 from vllm.v1.engine import (EngineCoreEvent, EngineCoreEventType,
                             EngineCoreOutput, EngineCoreOutputs)
+from vllm.v1.guided_decoding import GuidedDecodingManager
 from vllm.v1.metrics.stats import SchedulerStats
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = init_logger(__name__)
 
@@ -31,12 +36,14 @@ class Scheduler:
         lora_config: Optional[LoRAConfig],
         speculative_config: Optional[SpeculativeConfig],
         log_stats: bool,
+        guided_decoding_manager: GuidedDecodingManager,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.lora_config = lora_config
         self.speculative_config = speculative_config
         self.log_stats = log_stats
+        self.guided_decoding_manager = guided_decoding_manager
 
         # Scheduling constraints.
         self.max_num_running_reqs = self.scheduler_config.max_num_seqs
@@ -113,6 +120,14 @@ class Scheduler:
         scheduled_running_reqs: List[Request] = []
         preempted_reqs: List[Request] = []
 
+        # NOTE: guided_decoding_request_ids maps
+        # guided request's (request that use structured decoding)
+        # request_id to the running request index.
+        # This will helps us determine to slice the grammar bitmask
+        # and only applies valid mask for requests that
+        # uses structured decoding.
+        guided_decoding_request_ids: Dict[str, int] = {}
+
         req_to_new_block_ids: Dict[str, List[int]] = {}
         num_scheduled_tokens: Dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
@@ -138,6 +153,10 @@ class Scheduler:
                               request.num_computed_tokens)
             num_new_tokens = min(num_new_tokens, token_budget)
             assert num_new_tokens > 0
+
+            # Guided decoding related.
+            if request.use_guided_decoding:
+                guided_decoding_request_ids[request.request_id] = req_index
 
             # Schedule encoder inputs.
             encoder_inputs_to_schedule, num_new_tokens, new_encoder_budget = (
@@ -220,11 +239,22 @@ class Scheduler:
 
         # Next, schedule the WAITING requests.
         if not preempted_reqs:
+            # Use a temporary deque to collect requests that need to be skipped
+            # and put back at the head of the waiting queue later
+            still_waiting: deque[Request] = deque()
             while self.waiting and token_budget > 0:
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
                 request = self.waiting[0]
+
+                if request.status == RequestStatus.WAITING_FOR_FSM:
+                    if request.grammar and request.is_grammar_ready:
+                        request.status = RequestStatus.WAITING
+                    else:
+                        guided_req = self.waiting.popleft()
+                        still_waiting.append(guided_req)
+                        continue
 
                 # Check that adding the request still respects the max_loras
                 # constraint.
@@ -280,6 +310,9 @@ class Scheduler:
                     break
 
                 self.waiting.popleft()
+                if request.use_guided_decoding:
+                    guided_decoding_request_ids[request.request_id] = req_index
+                req_index += 1
                 self.running.append(request)
                 self.scheduled_req_ids.add(request.request_id)
                 self.request_scheduled(request, scheduled_timestamp)
@@ -310,6 +343,10 @@ class Scheduler:
                         self.encoder_cache_manager.allocate(request, i)
                     encoder_budget = new_encoder_budget
 
+        # Put back any skipped requests at the head of the waiting queue
+        if still_waiting:
+            self.waiting = still_waiting + self.waiting
+
         # Check if the scheduling constraints are satisfied.
         total_num_scheduled_tokens = sum(num_scheduled_tokens.values())
         assert total_num_scheduled_tokens <= self.max_num_scheduled_tokens
@@ -329,6 +366,23 @@ class Scheduler:
             num_common_prefix_blocks = (
                 self.kv_cache_manager.get_num_common_prefix_blocks(
                     any_request, len(self.running)))
+
+        # Prepare the guided decoding bitmask for this batch.
+        grammar_bitmask: Optional[np.ndarray] = None
+        if guided_decoding_request_ids:
+            # Fill the bitmask using the index of each request equal to its
+            # position in the batch. Resize the bitmask down to the size of
+            # the batch.
+            bitmask_tensor = self.guided_decoding_manager.grammar_bitmask
+            assert bitmask_tensor is not None
+            for req_id, batch_index in guided_decoding_request_ids.items():
+                request = self.requests[req_id]
+                assert request.grammar is not None
+                if not request.grammar.matcher.is_terminated():
+                    request.grammar.fill_bitmask(bitmask_tensor, batch_index)
+            if len(self.running) < bitmask_tensor.shape[0]:
+                bitmask_tensor = bitmask_tensor[:len(self.running)]
+            grammar_bitmask = bitmask_tensor.numpy()
 
         # Construct the scheduler output.
         new_reqs_data = [
@@ -368,6 +422,8 @@ class Scheduler:
             # the previous and the current steps.
             finished_req_ids=self.finished_req_ids,
             free_encoder_input_ids=self.encoder_cache_manager.get_freed_ids(),
+            guided_decoding_request_ids=guided_decoding_request_ids,
+            grammar_bitmask=grammar_bitmask,
         )
 
         self.finished_req_ids = set()
@@ -544,6 +600,27 @@ class Scheduler:
             stopped = False
             new_logprobs = None
             new_token_ids: List[int] = []
+
+            # Handle guided decoding FSM advancement if applicable
+            # NOTE: For all requests that uses guided decoding, the grammar
+            # should be ready at this point.
+            # PERF: This is currently expensive given that FSM is being
+            # advanced here.
+            if request.use_guided_decoding:
+                grammar = request.grammar
+                assert grammar is not None
+                if len(generated_token_ids) > 1:
+                    logger.error(
+                        "Structured output does not currently support "
+                        "more than one token at a time. Only the first "
+                        "token will be used.")
+                # accept_token advances the FSM
+                accepted = grammar.accept_token(generated_token_ids[0])
+                if not accepted:
+                    logger.error(
+                        "Failed to advance FSM for request %s "
+                        "for tokens %s. Please file an issue.", req_id,
+                        generated_token_ids[0])
 
             if request.num_computed_tokens >= request.num_tokens:
                 for output_token_id in generated_token_ids:
