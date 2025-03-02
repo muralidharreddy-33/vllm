@@ -7,6 +7,9 @@ import os
 from vllm import LLM, SamplingParams
 from vllm.utils import get_open_port
 
+GPUs_per_dp_rank = 2
+DP_size = 2
+
 
 def main(dp_size, dp_rank, dp_master_ip, dp_master_port, GPUs_per_dp_rank):
     os.environ["VLLM_DP_RANK"] = str(dp_rank)
@@ -48,8 +51,8 @@ def main(dp_size, dp_rank, dp_master_ip, dp_master_port, GPUs_per_dp_rank):
                                      max_tokens=16 * (dp_rank + 1))
 
     # Create an LLM.
-    llm = LLM(model="facebook/opt-125m",
-              tensor_parallel_size=2,
+    llm = LLM(model="neuralmagic/Mixtral-8x7B-Instruct-v0.1-FP8",
+              tensor_parallel_size=GPUs_per_dp_rank,
               enforce_eager=True)
     outputs = llm.generate(prompts, sampling_params)
     # Print the outputs.
@@ -62,14 +65,12 @@ def main(dp_size, dp_rank, dp_master_ip, dp_master_port, GPUs_per_dp_rank):
 
 if __name__ == "__main__":
     from multiprocessing import Process
-    dp_size = 2
-    GPUs_per_dp_rank = 2
     dp_master_ip = "127.0.0.1"
     dp_master_port = get_open_port()
     procs = []
-    for i in range(dp_size):
+    for i in range(DP_size):
         proc = Process(target=main,
-                       args=(dp_size, i, dp_master_ip, dp_master_port,
+                       args=(DP_size, i, dp_master_ip, dp_master_port,
                              GPUs_per_dp_rank))
         proc.start()
         procs.append(proc)
