@@ -16,7 +16,6 @@ def create_test_prompts() -> List[Tuple[str, SamplingParams]]:
          SamplingParams(temperature=0.8, top_k=5, presence_penalty=0.2)),
         ("What is the meaning of life?",
          SamplingParams(n=2,
-                        best_of=5,
                         temperature=0.8,
                         top_p=0.95,
                         frequency_penalty=0.1)),
