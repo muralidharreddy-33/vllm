@@ -484,6 +484,7 @@ class Scheduler:
 
         new_running: List[Request] = []
         outputs: List[EngineCoreOutput] = []
+        finished_requests: List[str] = []
 
         # NOTE(woosuk): As len(self.running) can be up to 1K or more, the below
         # loop can be a performance bottleneck. We should do our best to avoid
@@ -567,15 +568,18 @@ class Scheduler:
             # Transmit partial if chunked prefill & prompt logprobs is enabled
             if new_token_ids or prompt_logprobs_tensors is not None:
                 # Add EngineCoreOutput for this Request.
+                finish_reason = request.get_finished_reason()
                 outputs.append(
                     EngineCoreOutput(
                         request_id=req_id,
                         new_token_ids=new_token_ids,
-                        finish_reason=request.get_finished_reason(),
+                        finish_reason=finish_reason,
                         new_logprobs=new_logprobs,
                         new_prompt_logprobs_tensors=prompt_logprobs_tensors,
                         stop_reason=request.stop_reason,
                         events=request.take_events()))
+                if finish_reason:
+                    finished_requests.append(req_id)
 
             self.scheduled_req_ids.remove(request.request_id)
             if not stopped:
@@ -584,6 +588,7 @@ class Scheduler:
         self.running = new_running
         return EngineCoreOutputs(
             outputs=outputs,
+            finished_requests=finished_requests,
             scheduler_stats=self.make_stats(),
         )
 
@@ -654,7 +659,7 @@ class Scheduler:
         return len(self.waiting) + len(self.running)
 
     def has_unfinished_requests(self) -> bool:
-        return self.get_num_unfinished_requests() > 0
+        return len(self.running) > 0 or len(self.waiting) > 0
 
     def get_num_unscheduled_requests(self) -> int:
         """Number of requests that are not being processed by the executor."""
