@@ -56,7 +56,7 @@ class RequestState:
         cls,
         tokenizer: AnyTokenizer,
         request: EngineCoreRequest,
-        queue: Optional[asyncio.Queue[RequestOutput]],
+        queue: Optional[asyncio.Queue[Union[RequestOutput, Exception]]],
         log_stats: bool,
     ) -> "RequestState":
         return cls(
@@ -102,6 +102,13 @@ class OutputProcessor:
     def has_unfinished_requests(self) -> bool:
         return len(self.request_states) > 0
 
+    def propagate_error(self, e: Exception):
+        """Propagate error to all generate() tasks."""
+
+        for _, state in self.request_states.items():
+            assert state.queue is not None
+            state.queue.put_nowait(e)
+
     def abort_requests(
         self,
         request_ids: List[str],
@@ -114,7 +121,7 @@ class OutputProcessor:
     def add_request(
         self,
         request: EngineCoreRequest,
-        queue: Optional[asyncio.Queue[RequestOutput]] = None,
+        queue: Optional[asyncio.Queue[Union[RequestOutput, Exception]]] = None,
     ) -> None:
         request_id = request.request_id
         if request_id in self.request_states:

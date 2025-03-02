@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import os
 from typing import AsyncGenerator, List, Mapping, Optional, Set, Type, Union
 
 import numpy as np
@@ -21,8 +20,9 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.transformers_utils.tokenizer_group import init_tokenizer_from_configs
 from vllm.usage.usage_lib import UsageContext
-from vllm.utils import cdiv, kill_process_tree
-from vllm.v1.engine.core_client import EngineCoreClient
+from vllm.utils import cdiv
+from vllm.v1.engine.core_client import AsyncMPClient
+from vllm.v1.engine.exceptions import EngineDeadError, EngineGenerateError
 from vllm.v1.engine.output_processor import OutputProcessor
 from vllm.v1.engine.parallel_sampling import generate_parallel_sampling_async
 from vllm.v1.engine.processor import Processor
@@ -47,8 +47,6 @@ class AsyncLLM(EngineClient):
         log_requests: bool = True,
         start_engine_loop: bool = True,
     ) -> None:
-
-        assert start_engine_loop
 
         self.model_config = vllm_config.model_config
 
@@ -83,9 +81,7 @@ class AsyncLLM(EngineClient):
                                                 log_stats=self.log_stats)
 
         # EngineCore (starts the engine in background process).
-        self.engine_core = EngineCoreClient.make_client(
-            multiprocess_mode=True,
-            asyncio_mode=True,
+        self.engine_core = AsyncMPClient(
             vllm_config=vllm_config,
             executor_class=executor_class,
             log_stats=self.log_stats,
@@ -142,6 +138,9 @@ class AsyncLLM(EngineClient):
         priority: int = 0,
     ) -> asyncio.Queue[RequestOutput]:
         """Add new request to the AsyncLLM."""
+
+        if self.errored:
+            raise EngineDeadError
 
         # 1) Create a new output queue for the request.
         if self.output_processor.is_request_active(request_id):
@@ -221,10 +220,14 @@ class AsyncLLM(EngineClient):
                 # Note: drain queue without await if possible (avoids
                 # task switching under load which helps performance).
                 out = q.get_nowait() if not q.empty() else await q.get()
+                if isinstance(out, Exception):
+                    raise out
 
                 # Coalesce any additional queued outputs
                 while not q.empty():
                     next_out = q.get_nowait()
+                    if isinstance(next_out, Exception):
+                        raise next_out
                     if sampling_params.output_kind == RequestOutputKind.DELTA:
                         out.add(next_out)
                     else:
@@ -240,7 +243,23 @@ class AsyncLLM(EngineClient):
         # request if we end up here.
         except asyncio.CancelledError:
             await self.abort(request_id)
+            if self.log_requests:
+                logger.info("Request %s aborted.", request_id)
             raise
+
+        # Engine is dead. Do not abort since we shut down.
+        except EngineDeadError:
+            if self.log_requests:
+                logger.info("Request %s failed.", request_id)
+            raise
+
+        # Error in the generate() task (possibly recoverable).
+        except Exception as e:
+            await self.abort(request_id)
+            if self.log_requests:
+                logger.info("Request %s failed.", request_id)
+            logger.exception("GOT EXCEPTION:", exc_info=e)
+            raise EngineGenerateError from e
 
     def generate(
         self,
@@ -311,8 +330,11 @@ class AsyncLLM(EngineClient):
                 )
 
         except Exception as e:
-            logger.exception("EngineCore output handler hit an error: %s", e)
-            kill_process_tree(os.getpid())
+            logger.error("AsyncLLM output_handler got an Exception:",
+                         exc_info=e)
+            # NOTE(rob): since we check isinstance(e, Exception), need to
+            # propagate an instance of EngineDeadError rather than type.
+            self.output_processor.propagate_error(EngineDeadError())
 
     async def abort(self, request_id: str) -> None:
         """Abort RequestId in OutputProcessor and EngineCore."""
@@ -410,16 +432,20 @@ class AsyncLLM(EngineClient):
 
     @property
     def is_running(self) -> bool:
-        return True
+        # Have not started the loop yet.
+        if self.output_handler is None:
+            return True
+
+        return not self.output_handler.done()
 
     @property
     def is_stopped(self) -> bool:
-        return False
+        return self.errored
 
     @property
     def errored(self) -> bool:
-        return False
+        return (self.engine_core.is_engine_dead or not self.is_running)
 
     @property
     def dead_error(self) -> BaseException:
-        return Exception()  # TODO: implement
+        return EngineDeadError()
