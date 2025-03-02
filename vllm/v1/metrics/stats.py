@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
-    from vllm.outputs import RequestOutput
     from vllm.v1.engine import EngineCoreEvent, EngineCoreOutput, FinishReason
     from vllm.v1.output_processor import RequestState
 
@@ -82,6 +81,7 @@ class IterationStats:
         self.num_prompt_tokens = 0
         self.num_preempted_reqs = 0
         self.finished_requests: List[FinishedRequestStats] = []
+        self.max_num_generation_tokens_iter: List[int] = []
         self.time_to_first_tokens_iter: List[float] = []
         self.time_per_output_tokens_iter: List[float] = []
         self.waiting_lora_adapters: Dict[str, int] = {}
@@ -150,7 +150,7 @@ class IterationStats:
                 self.num_preempted_reqs += 1
 
     def update_from_finished_request(self, finish_reason: "FinishReason",
-                                     request_output: "RequestOutput",
+                                     num_prompt_tokens: int,
                                      req_stats: RequestStateStats):
         e2e_latency = self._time_since(req_stats.arrival_time)
 
@@ -172,7 +172,7 @@ class IterationStats:
         finished_req = \
             FinishedRequestStats(finish_reason=finish_reason,
                                  e2e_latency=e2e_latency,
-                                 num_prompt_tokens=len(request_output.prompt_token_ids),
+                                 num_prompt_tokens=num_prompt_tokens,
                                  num_generation_tokens=req_stats.num_generation_tokens,
                                  queued_time=queued_time,
                                  prefill_time=prefill_time,
