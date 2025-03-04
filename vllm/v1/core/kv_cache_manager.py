@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from collections import defaultdict
-from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Optional
 
 from vllm.logger import init_logger
-from vllm.utils import cdiv
-from vllm.v1.core.block_pool import BlockPool
-from vllm.v1.core.kv_cache_utils import (BlockHashType, KVCacheBlock,
+from vllm.v1.core.kv_cache_utils import (FreeKVCacheBlockQueue, KVCacheBlock,
+                                         RadixTrie, generate_block_extra_keys,
                                          hash_request_tokens)
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
@@ -52,20 +53,19 @@ class KVCacheManager:
         # Mapping from request ID to blocks to track the blocks allocated
         # for each request, so that we can free the blocks when the request
         # is finished.
-        self.req_to_blocks: DefaultDict[str,
-                                        List[KVCacheBlock]] = defaultdict(list)
+        self.req_to_blocks: defaultdict[str,
+                                        list[KVCacheBlock]] = defaultdict(list)
 
-        # Mapping from request ID to kv block hashes.
-        # This is to avoid recomputing the block hashes for each call of
-        # `get_computed_blocks` or `allocate_slots`.
-        self.req_to_block_hashes: DefaultDict[
-            str, List[BlockHashType]] = defaultdict(list)
+        # Mapping from request ID to Radix Trie paths for prefix caching.
+        # This replaces the block hashes for Radix Trie prefix matching.
+        self.req_to_prefix_paths: defaultdict[
+            str, list[Tuple[list[int], Optional[tuple[Any, ...]]]]] = defaultdict(list)
 
         # {req_id: The number of cached blocks for this given request}
         # This is used to track the number of cached blocks for each request.
         # This is only used to track the RUNNING requests, we do not track the
-        # data for reempted ones.
-        self.num_cached_block: Dict[str, int] = {}
+        # data for preempted ones.
+        self.num_cached_block: dict[str, int] = {}
         self.prefix_cache_stats = PrefixCacheStats()
 
     @property
@@ -88,8 +88,8 @@ class KVCacheManager:
         return stats
 
     def get_computed_blocks(
-            self, request: Request) -> Tuple[List[KVCacheBlock], int]:
-        """Get the computed (cached) blocks for the request.
+            self, request: Request) -> tuple[list[KVCacheBlock], int]:
+        """Get the computed (cached) blocks for the request using Radix Trie.
         Note that the computed blocks must be full.
 
         Args:
@@ -106,24 +106,22 @@ class KVCacheManager:
 
         computed_blocks = []
 
-        # The block hashes for the request may already be computed
-        # if the scheduler has tried to schedule the request before.
-        block_hashes = self.req_to_block_hashes[request.request_id]
-        if not block_hashes:
-            block_hashes = hash_request_tokens(self.block_size, request)
-            self.req_to_block_hashes[request.request_id] = block_hashes
+        # Get or compute the prefix paths for the request using Radix Trie.
+        prefix_paths = self.req_to_prefix_paths[request.request_id]
+        if not prefix_paths:
+            prefix_paths = hash_request_tokens(self.block_size, request)
+            self.req_to_prefix_paths[request.request_id] = prefix_paths
 
-        for block_hash in block_hashes:
-            # block_hashes is a chain of block hashes. If a block hash is not
-            # in the cached_block_hash_to_id, the following block hashes are
-            # not computed yet for sure.
-            if cached_block := self.block_pool.get_cached_block(block_hash):
-                computed_blocks.append(cached_block)
+        # Use Radix Trie to find cached blocks for the prefix paths.
+        for block_tokens, extra_keys in prefix_paths:
+            cached_blocks = self.block_pool.radix_trie.find_prefix(block_tokens, extra_keys)
+            if cached_blocks:
+                computed_blocks.extend(cached_blocks)
             else:
                 break
 
         self.prefix_cache_stats.requests += 1
-        self.prefix_cache_stats.queries += len(block_hashes)
+        self.prefix_cache_stats.queries += len(prefix_paths)
         self.prefix_cache_stats.hits += len(computed_blocks)
 
         # NOTE(woosuk): Since incomplete blocks are not eligible for
@@ -136,9 +134,9 @@ class KVCacheManager:
         self,
         request: Request,
         num_tokens: int,
-        new_computed_blocks: Optional[List[KVCacheBlock]] = None
-    ) -> Optional[List[KVCacheBlock]]:
-        """Add slots for a request with new tokens to append.
+        new_computed_blocks: Optional[list[KVCacheBlock]] = None
+    ) -> Optional[list[KVCacheBlock]]:
+        """Add slots for a request with new tokens to append using Radix Trie.
 
         Args:
             request: The request to allocate slots.
@@ -187,7 +185,7 @@ class KVCacheManager:
             # Cannot allocate new blocks
             return None
 
-        # Touch the computed blocks to make sure they won't be evicted.
+        # Touch the computed blocks to make sure they won't be evicted using Radix Trie.
         if self.enable_caching:
             self.block_pool.touch(new_computed_blocks)
         else:
@@ -219,6 +217,8 @@ class KVCacheManager:
 
             # Concatenate the computed block IDs and the new block IDs.
             new_blocks = self.block_pool.get_new_blocks(num_new_blocks)
+            for block in new_blocks:
+                block.token_ids = request.all_token_ids[len(req_blocks) * self.block_size:(len(req_blocks) + 1) * self.block_size]
             req_blocks.extend(new_blocks)
 
         if not self.enable_caching:
@@ -228,7 +228,7 @@ class KVCacheManager:
         # for a running request.
         num_cached_blocks = self.num_cached_block.get(request.request_id,
                                                       len(new_computed_blocks))
-        # Speculated tokens might be rejected in the future, so we does
+        # Speculated tokens might be rejected in the future, so we do
         # not cache any speculated tokens. We only cache blocks with
         # generated (accepted) tokens.
         num_full_blocks_after_append = (num_computed_tokens + num_tokens - len(
@@ -237,7 +237,7 @@ class KVCacheManager:
         self.block_pool.cache_full_blocks(
             request=request,
             blocks=req_blocks,
-            block_hashes=self.req_to_block_hashes[request.request_id],
+            prefix_paths=self.req_to_prefix_paths[request.request_id],
             num_cached_blocks=num_cached_blocks,
             num_full_blocks=num_full_blocks_after_append,
             block_size=self.block_size,
@@ -248,7 +248,7 @@ class KVCacheManager:
         return new_blocks
 
     def free(self, request: Request) -> None:
-        """Free the blocks allocated for the request.
+        """Free the blocks allocated for the request using Radix Trie.
         When caching is enabled, we free the blocks in reverse order so that
         the tail blocks are evicted first.
 
@@ -265,10 +265,18 @@ class KVCacheManager:
 
         self.block_pool.free_blocks(ordered_blocks)
         self.num_cached_block.pop(request.request_id, None)
+        if self.enable_caching:
+            # Remove prefix paths from Radix Trie
+            prefix_paths = self.req_to_prefix_paths.pop(request.request_id, [])
+            for block_tokens, extra_keys in prefix_paths:
+                if block_tokens:
+                    block = next((b for b in blocks if b.token_ids == block_tokens), None)
+                    if block:
+                        self.block_pool.radix_trie.remove(block_tokens, block)
 
     def reset_prefix_cache(self) -> bool:
-        """Reset prefix cache. This function may be used in RLHF
-        flows to invalid prefix caching after the weights are updated,
+        """Reset prefix cache using Radix Trie. This function may be used in RLHF
+        flows to invalidate prefix caching after the weights are updated,
         or used for resetting prefix caching status for benchmarking.
 
         Returns:
@@ -286,10 +294,10 @@ class KVCacheManager:
         num_running_requests: int,
     ) -> int:
         """Calculate the number of common prefix blocks shared by all requests
-        in the RUNNING state.
+        in the RUNNING state using Radix Trie.
 
         The function determines this by selecting any request and iterating
-        through its blocks.  A block is considered a common prefix block if its
+        through its blocks. A block is considered a common prefix block if its
         `ref_cnt` equals the total number of requests in the RUNNING state.
 
         NOTE(woosuk): The number of requests in the RUNNING state is **greater
@@ -321,17 +329,18 @@ class KVCacheManager:
         assert request.status == RequestStatus.RUNNING
         blocks = self.req_to_blocks[request.request_id]
         num_common_blocks = 0
-        for block in blocks:
-            if block.ref_cnt == num_running_requests:
+        prefix_paths = self.req_to_prefix_paths[request.request_id]
+        for block, (block_tokens, _) in zip(blocks, prefix_paths):
+            if block.ref_cnt == num_running_requests and self.block_pool.radix_trie.find_prefix(block_tokens, None):
                 num_common_blocks += 1
             else:
                 break
         return num_common_blocks
 
     def free_block_hashes(self, request: Request) -> None:
-        """Discard the block hashes for the request.
+        """Discard the prefix paths for the request using Radix Trie.
 
         NOTE: Unlike `free`, this method should be called only when the request
         is finished, not when it is preempted.
         """
-        self.req_to_block_hashes.pop(request.request_id, None)
+        self.req_to_prefix_paths.pop(request.request_id, None)

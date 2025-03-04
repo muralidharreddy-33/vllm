@@ -2,7 +2,8 @@
 
 import time
 from collections import deque
-from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
+from collections.abc import Iterable
+from typing import Optional, Union
 
 from vllm.config import (CacheConfig, LoRAConfig, ModelConfig, SchedulerConfig,
                          SpeculativeConfig)
@@ -19,7 +20,6 @@ from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 
 logger = init_logger(__name__)
-
 
 class Scheduler:
 
@@ -46,7 +46,7 @@ class Scheduler:
 
         num_gpu_blocks = cache_config.num_gpu_blocks
         assert isinstance(num_gpu_blocks, int) and num_gpu_blocks > 0
-        # Create the KV cache manager.
+        # Create the KV cache manager with Radix Trie for prefix caching.
         self.kv_cache_manager = KVCacheManager(
             block_size=self.cache_config.block_size,
             num_gpu_blocks=num_gpu_blocks,
@@ -57,24 +57,24 @@ class Scheduler:
         self.block_size = self.cache_config.block_size
 
         # req_id -> Request
-        self.requests: Dict[str, Request] = {}
+        self.requests: dict[str, Request] = {}
         # Priority queues for requests.
-        self.waiting: Deque[Request] = deque()
-        self.running: List[Request] = []
+        self.waiting: deque[Request] = deque()
+        self.running: list[Request] = []
         # The requests that have been scheduled and are being executed
         # by the executor.
-        self.scheduled_req_ids: Set[str] = set()
+        self.scheduled_req_ids: set[str] = set()
 
         # The request IDs that are finished in between the previous and the
         # current steps. This is used to notify the workers about the finished
         # requests so that they can free the cached states for those requests.
         # This is flushed at the end of each scheduling step.
-        self.finished_req_ids: Set[str] = set()
+        self.finished_req_ids: set[str] = set()
 
         # OPTIMIZATION: Cache the CachedRequestData objects to avoid creating
         # them at each scheduling step.
         # Request id -> CachedRequestData
-        self._cached_reqs_data: Dict[str, CachedRequestData] = {}
+        self._cached_reqs_data: dict[str, CachedRequestData] = {}
 
         # Encoder-related.
         # Calculate encoder cache size if applicable
@@ -108,19 +108,19 @@ class Scheduler:
         # chunked prefills, prefix caching, speculative decoding,
         # and the "jump decoding" optimization in the future.
 
-        scheduled_new_reqs: List[Request] = []
-        scheduled_resumed_reqs: List[Request] = []
-        scheduled_running_reqs: List[Request] = []
-        preempted_reqs: List[Request] = []
+        scheduled_new_reqs: list[Request] = []
+        scheduled_resumed_reqs: list[Request] = []
+        scheduled_running_reqs: list[Request] = []
+        preempted_reqs: list[Request] = []
 
-        req_to_new_block_ids: Dict[str, List[int]] = {}
-        num_scheduled_tokens: Dict[str, int] = {}
+        req_to_new_block_ids: dict[str, list[int]] = {}
+        num_scheduled_tokens: dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
         # Encoder-related.
-        scheduled_encoder_inputs: Dict[str, List[int]] = {}
+        scheduled_encoder_inputs: dict[str, list[int]] = {}
         encoder_budget = self.max_num_encoder_input_tokens
         # Spec decode-related.
-        scheduled_spec_decode_tokens: Dict[str, List[int]] = {}
+        scheduled_spec_decode_tokens: dict[str, list[int]] = {}
 
         # For logging.
         scheduled_timestamp = time.monotonic()
@@ -211,7 +211,7 @@ class Scheduler:
                 encoder_budget = new_encoder_budget
 
         # Record the LoRAs in scheduled_running_reqs
-        requested_loras: Set[int] = set()
+        requested_loras: set[int] = set()
         if self.lora_config:
             requested_loras = set(
                 req.lora_request.lora_int_id for req in scheduled_running_reqs
@@ -242,7 +242,7 @@ class Scheduler:
                         # This is too conservative and could be optimized.
                         break
 
-                # Get already-cached tokens.
+                # Get already-cached tokens using Radix Trie.
                 computed_blocks, num_computed_tokens = \
                     self.kv_cache_manager.get_computed_blocks(request)
                 # Number of tokens to be scheduled.
@@ -321,7 +321,7 @@ class Scheduler:
         assert (len(scheduled_new_reqs) + len(scheduled_resumed_reqs) +
                 len(scheduled_running_reqs) <= len(self.running))
 
-        # Get the longest common prefix among all requests in the running queue.
+        # Get the longest common prefix among all requests in the running queue using Radix Trie.
         # This can be potentially used for cascade attention.
         num_common_prefix_blocks = 0
         if self.running:
@@ -378,7 +378,7 @@ class Scheduler:
         request: Request,
         num_scheduled_tokens: int,
         num_scheduled_spec_tokens: int,
-        new_block_ids: List[int],
+        new_block_ids: list[int],
         resumed_from_preemption: bool,
     ) -> "CachedRequestData":
         # OPTIMIZATION: Cache the CachedRequestData objects to avoid creating
@@ -407,7 +407,7 @@ class Scheduler:
         num_computed_tokens: int,
         num_new_tokens: int,
         encoder_budget: int,
-    ) -> Tuple[List[int], int, int]:
+    ) -> tuple[list[int], int, int]:
         """
         Determine which encoder inputs need to be scheduled in the current step,
         and update `num_new_tokens` and encoder token budget accordingly.
@@ -427,7 +427,7 @@ class Scheduler:
         if not request.has_encoder_inputs():
             return [], num_new_tokens, encoder_budget
 
-        encoder_inputs_to_schedule: List[int] = []
+        encoder_inputs_to_schedule: list[int] = []
         mm_positions = request.mm_positions
         assert mm_positions is not None
         assert len(mm_positions) > 0
@@ -460,7 +460,7 @@ class Scheduler:
                     # encoder input.
                     num_new_tokens = start_pos - num_computed_tokens
                 else:
-                    # Because of prefix caching, num_computed_tokens is greater
+                    # Because of prefix caching with Radix Trie, num_computed_tokens is greater
                     # than start_pos even though its encoder input is not
                     # available. In this case, we can't schedule any token for
                     # the request in this step.
@@ -482,8 +482,8 @@ class Scheduler:
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
 
-        new_running: List[Request] = []
-        outputs: List[EngineCoreOutput] = []
+        new_running: list[Request] = []
+        outputs: list[EngineCoreOutput] = []
 
         # NOTE(woosuk): As len(self.running) can be up to 1K or more, the below
         # loop can be a performance bottleneck. We should do our best to avoid
@@ -543,7 +543,7 @@ class Scheduler:
 
             stopped = False
             new_logprobs = None
-            new_token_ids: List[int] = []
+            new_token_ids: list[int] = []
 
             if request.num_computed_tokens >= request.num_tokens:
                 for output_token_id in generated_token_ids:

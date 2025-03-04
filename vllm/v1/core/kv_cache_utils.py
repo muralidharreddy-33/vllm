@@ -3,7 +3,7 @@
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple, Optional, Tuple
 
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
@@ -14,82 +14,98 @@ from vllm.v1.request import Request
 
 logger = init_logger(__name__)
 
+# Radix Trie Node for prefix caching
+class RadixNode:
+    def __init__(self):
+        self.children: dict[int, 'RadixNode'] = {}  # Token ID as key
+        self.block: Optional['KVCacheBlock'] = None  # Associated KV cache block
+        self.is_end: bool = False  # Marks the end of a prefix path
+        self.ref_count: int = 0  # Reference count for block usage
+        self.last_accessed: float = -1.0  # Last access time for LRU eviction
+        self.computed: bool = False  # Track if block is computed
 
-class BlockHashType(NamedTuple):
-    """Hash value of a block (int), the token IDs in the block, and extra keys.
-    We keep a tuple of token IDs and extra keys to reduce the likelihood of
-    hash collisions when the hash value is the same. But please note that 
-    hash collisions can still theoretically occur, albeit with an extremely 
-    low probability.
-    """
-    # Hash value of the block in an integer.
-    hash_value: int
-    # Token IDs in the block.
-    token_ids: Tuple[int, ...]
-    # Extra keys for the block.
-    extra_keys: Optional[Any] = None
+class RadixTrie:
+    def __init__(self, block_size: int):
+        self.root = RadixNode()
+        self.block_size = block_size
+        self.leaves = set([self.root])  # Track leaves for eviction
 
+    def insert(self, token_ids: Sequence[int], block: 'KVCacheBlock', extra_keys: Optional[Tuple[Any, ...]] = None) -> None:
+        """Insert a sequence of token IDs into the Radix Trie with associated block."""
+        curr = self.root
+        for token_id in token_ids:
+            if token_id not in curr.children:
+                curr.children[token_id] = RadixNode()
+                self.leaves.add(curr.children[token_id])
+                if len(curr.children) == 0:
+                    self.leaves.remove(curr)
+            curr = curr.children[token_id]
+        curr.block = block
+        curr.is_end = True
+        curr.ref_count += 1
+        curr.last_accessed = time.time()
+        curr.computed = True  # Mark as computed when inserted
 
-class PrefixCachingMetrics:
-    """Metrics for prefix caching with a hit rate of the most recent N requests.
+    def find_prefix(self, token_ids: Sequence[int], extra_keys: Optional[Tuple[Any, ...]] = None) -> List['KVCacheBlock']:
+        """Find cached blocks for a prefix of token IDs in the Radix Trie."""
+        curr = self.root
+        cached_blocks = []
+        i = 0
+        while i < len(token_ids) and i < self.block_size * len(cached_blocks) + self.block_size:
+            token_id = token_ids[i]
+            if token_id not in curr.children:
+                break
+            curr = curr.children[token_id]
+            if curr.is_end and curr.block and curr.ref_count > 0 and curr.computed:
+                cached_blocks.append(curr.block)
+            i += 1
+        return cached_blocks
 
-    Args:
-        interval: The number of the most recent requests to aggregate.
-            Defaults to 1000.
-    """
+    def remove(self, token_ids: Sequence[int], block: 'KVCacheBlock') -> None:
+        """Remove a block from the Radix Trie, updating reference counts."""
+        curr = self.root
+        path = []
+        for token_id in token_ids:
+            if token_id not in curr.children:
+                return
+            path.append((curr, token_id))
+            curr = curr.children[token_id]
+        if curr.block == block and curr.ref_count > 0:
+            curr.ref_count -= 1
+            curr.last_accessed = time.time()
+            if curr.ref_count == 0:
+                self._evict_node(curr, path)
 
-    def __init__(self, interval: int = 1000):
-        self.interval = interval
-        # The current aggregated values.
-        self.aggregated_requests = 0
-        self.aggregated_query_total = 0
-        self.aggregated_query_hit = 0
-        # A deque of (requests, queries, hits) for the most recent requests.
-        self.query_queue: deque[Tuple[int, int, int]] = deque()
+    def _evict_node(self, node: RadixNode, path: List[Tuple[RadixNode, int]]) -> None:
+        """Evict a node from the Radix Trie using LRU policy."""
+        if node.block and node.ref_count == 0:
+            del node.block
+            if node.children:
+                for child in node.children.values():
+                    self.leaves.remove(child)
+            parent, token_id = path[-1] if path else (self.root, None)
+            if token_id is not None:
+                del parent.children[token_id]
+                if len(parent.children) == 0 and parent != self.root:
+                    self.leaves.add(parent)
+            self.leaves.remove(node)
 
-    def observe(self, stats: PrefixCacheStats):
-        """Observe the prefix caching for a set of requests.
-
-        This function is called with information gathered when new requests
-        are being scheduled and are looking for computed blocks.
-
-        When there are more than `interval` requests, the oldest set of
-        requestsare removed from the metrics.
-
-        Args:
-            stats: The prefix cache stats.
-        """
-        # reset_prefix_cache was invoked before the current update.
-        # Reset the metrics before aggregating the current stats.
-        if stats.reset:
-            self.reset()
-
-        # Update the metrics.
-        self.query_queue.append((stats.requests, stats.queries, stats.hits))
-        self.aggregated_requests += stats.requests
-        self.aggregated_query_total += stats.queries
-        self.aggregated_query_hit += stats.hits
-
-        # Remove the oldest stats if the number of requests exceeds.
-        if self.aggregated_requests > self.interval:
-            old_requests, old_queries, old_hits = self.query_queue.popleft()
-            self.aggregated_requests -= old_requests
-            self.aggregated_query_total -= old_queries
-            self.aggregated_query_hit -= old_hits
-
-    def reset(self):
-        """Reset the metrics."""
-        self.aggregated_requests = 0
-        self.aggregated_query_total = 0
-        self.aggregated_query_hit = 0
-        self.query_queue.clear()
-
-    @property
-    def hit_rate(self) -> float:
-        """Calculate the hit rate for the past N requests."""
-        if self.aggregated_query_total == 0:
-            return 0.0
-        return self.aggregated_query_hit / self.aggregated_query_total
+    def evict_lru(self, num_blocks: int) -> List['KVCacheBlock']:
+        """Evict the least recently used blocks from the Radix Trie."""
+        evicted_blocks = []
+        leaves = [(node.last_accessed, node) for node in self.leaves if node.ref_count == 0 and node.block]
+        if leaves:
+            import heapq
+            heapq.heapify(leaves)
+            for _ in range(min(num_blocks, len(leaves))):
+                _, node = heapq.heappop(leaves)
+                if node.block:
+                    evicted_blocks.append(node.block)
+                    self.remove(list(node.block.token_ids), node.block)
+                    self.leaves.remove(node)
+                    if node.parent and len(node.parent.children) == 0:
+                        self.leaves.add(node.parent)
+        return evicted_blocks
 
 
 @dataclass
@@ -99,10 +115,8 @@ class KVCacheBlock:
     block_id: int
     # Reference count.
     ref_cnt: int = 0
-    # The hash of the block composed of (block hash, tuple of token IDs).
-    # It is only available when the block is full.
-    _block_hash: Optional[BlockHashType] = None
-
+    # The token IDs in the block (for Radix Trie prefix matching).
+    token_ids: list[int] = None  # Added for Radix Trie
     # Used to construct a doubly linked list for free blocks.
     # These two attributes should only be manipulated by FreeKVCacheBlockQueue.
     prev_free_block: Optional["KVCacheBlock"] = None
@@ -114,20 +128,6 @@ class KVCacheBlock:
     def decr_ref(self):
         self.ref_cnt -= 1
 
-    @property
-    def block_hash(self) -> Optional[BlockHashType]:
-        return self._block_hash
-
-    @block_hash.setter
-    def block_hash(self, block_hash: BlockHashType):
-        assert self.block_hash is None, (
-            "The block already has a hash. This should not happen.")
-        self._block_hash = block_hash
-
-    def reset_hash(self):
-        """Reset the block hash when the block is evicted."""
-        self._block_hash = None
-
     def __repr__(self) -> str:
         # Use block_id instead of KVCacheBlock object to avoid calling __repr__
         # on KVCacheBlock object recursively.
@@ -137,7 +137,7 @@ class KVCacheBlock:
             if self.next_free_block else None
         return (f"KVCacheBlock(block_id={self.block_id}, "
                 f"ref_cnt={self.ref_cnt}, "
-                f"_block_hash={self._block_hash}, "
+                f"token_ids={self.token_ids}, "
                 f"prev_free_block={prev_block_id}, "
                 f"next_free_block={next_block_id})")
 
@@ -164,7 +164,7 @@ class FreeKVCacheBlockQueue:
         blocks: A list of KVCacheBlock objects.
     """
 
-    def __init__(self, blocks: List[KVCacheBlock]) -> None:
+    def __init__(self, blocks: list[KVCacheBlock]) -> None:
         self.num_free_blocks = len(blocks)
 
         # Initialize the doubly linked list of free blocks.
@@ -233,7 +233,7 @@ class FreeKVCacheBlockQueue:
         block.next_free_block = None
         self.num_free_blocks += 1
 
-    def get_all_free_blocks(self) -> List[KVCacheBlock]:
+    def get_all_free_blocks(self) -> list[KVCacheBlock]:
         """Get all free blocks in the free list. Mainly used for testing.
         
         Returns:
@@ -248,15 +248,14 @@ class FreeKVCacheBlockQueue:
 
 
 def need_extra_keys(request: Request) -> bool:
-    """Check whether the blocks allocated to this request need extra hash keys.
+    """Check whether the blocks allocated to this request need extra keys for Radix Trie.
 
     Args:
         request (Request): The request. 
 
     Returns:
-        bool: Whether blocks allocated to this request need extra hash keys. 
+        bool: Whether blocks allocated to this request need extra keys. 
     """
-
     # Multimodal requests need to include the MM hash.
     # LoRA requests need to include the LoRA ID.
     return bool(request.mm_positions) or (request.lora_request is not None)
@@ -264,11 +263,8 @@ def need_extra_keys(request: Request) -> bool:
 
 def _gen_mm_extra_hash_keys(request: Request, start_token_idx: int,
                             end_token_idx: int,
-                            start_mm_idx: int) -> Tuple[List[Any], int]:
-    """Generate extra keys related to MultiModal request for block hash
-    computation. For multi-modal inputs, the extra keys are
-    (mm_hash, start_offset) that indicate a mm input contained in the
-    block and its starting offset in the block tokens.
+                            start_mm_idx: int) -> tuple[list[Any], int]:
+    """Generate extra keys related to MultiModal request for Radix Trie prefix matching.
     
     Args:
         request: The request object.
@@ -279,7 +275,7 @@ def _gen_mm_extra_hash_keys(request: Request, start_token_idx: int,
     Returns:
         A tuple of extra keys and the next multi-modal index.
     """
-    extra_keys: List[Any] = []
+    extra_keys: list[Any] = []
 
     mm_positions, mm_hashes = request.mm_positions, request.mm_hashes
     if not mm_positions:
@@ -331,14 +327,14 @@ def _gen_mm_extra_hash_keys(request: Request, start_token_idx: int,
     return extra_keys, curr_mm_idx
 
 
-def _gen_lora_extra_hash_keys(request: Request) -> List[int]:
-    """Generate extra keys related to LoRA for block hash computation.
+def _gen_lora_extra_hash_keys(request: Request) -> list[int]:
+    """Generate extra keys related to LoRA for Radix Trie prefix matching.
     
     Args:
         request: The request object.
     
     Returns:
-        Return LoRA id of the request if it is a LoRA request. Return empty
+        Return LoRA ID of the request if it is a LoRA request. Return empty
         list otherwise.
     """
     if not request.lora_request:
@@ -346,11 +342,11 @@ def _gen_lora_extra_hash_keys(request: Request) -> List[int]:
     return [request.lora_request.lora_int_id]
 
 
-def generate_block_hash_extra_keys(
+def generate_block_extra_keys(
         request: Request, start_token_idx: int, end_token_idx: int,
-        start_mm_idx: int) -> Tuple[Optional[Tuple[Any, ...]], int]:
-    """Generate extra keys for the block hash. The extra keys can come from
-    the multi-modal inputs and request specific metadata (e.g., LoRA ID).
+        start_mm_idx: int) -> tuple[Optional[tuple[Any, ...]], int]:
+    """Generate extra keys for the Radix Trie prefix matching. The extra keys can come from
+    the multi-modal inputs and request-specific metadata (e.g., LoRA ID).
     
     Args:
         request: The request object.
@@ -361,12 +357,12 @@ def generate_block_hash_extra_keys(
     Returns:
         A tuple of extra keys and the next multi-modal index.
     """
-    mm_extra_keys: List[Any]
+    mm_extra_keys: list[Any]
     mm_extra_keys, new_start_mm_idx = _gen_mm_extra_hash_keys(
         request, start_token_idx, end_token_idx, start_mm_idx)
-    lora_extra_keys: List[int] = _gen_lora_extra_hash_keys(request)
+    lora_extra_keys: list[int] = _gen_lora_extra_hash_keys(request)
 
-    extra_keys: List[Any] = lora_extra_keys + mm_extra_keys
+    extra_keys: list[Any] = lora_extra_keys + mm_extra_keys
 
     if not extra_keys:
         return None, new_start_mm_idx
@@ -374,52 +370,18 @@ def generate_block_hash_extra_keys(
     return tuple(extra_keys), new_start_mm_idx
 
 
-def hash_block_tokens(
-        parent_block_hash: Optional[int],
-        curr_block_token_ids: Sequence[int],
-        extra_keys: Optional[Tuple[Any, ...]] = None) -> BlockHashType:
-    """Computes a hash value corresponding to the contents of a block and
-    the contents of the preceding block(s). The hash value is used for
-    prefix caching. We use LRU cache for this function to avoid recomputing
-    hash values for the same block contents.
-
-    Args:
-        parent_block_hash: The hash of the parent block. None
-            if this is the first block.
-        curr_block_token_ids: A list of token ids in the current
-            block. The current block is assumed to be full.
-        extra_keys: Extra keys for the block.
-
-    Returns:
-        The hash value of the block and the token ids in the block.
-        The entire tuple is used as the hash key of the block.
-    """
-    if not parent_block_hash:
-        # Note that we use 'None' as a string here instead of None because
-        # as of Python 3.12, hash(None) returns a constant predictable value.
-        # This could possibly make it easier to find and exploit hash
-        # collisions. 'None' as a string will be hashed differently per process,
-        # but consistently within the same process. This is the same as the
-        # behavior of None prior to Python 3.12.
-        parent_block_hash = hash('None')
-
-    curr_block_token_ids_tuple = tuple(curr_block_token_ids)
-    return BlockHashType(
-        hash((parent_block_hash, curr_block_token_ids_tuple, extra_keys)),
-        curr_block_token_ids_tuple, extra_keys)
-
-
-def hash_request_tokens(block_size: int,
-                        request: Request) -> List[BlockHashType]:
-    """Computes hash values of a chain of blocks given a sequence of
-    token IDs. The hash value is used for prefix caching.
+def hash_request_tokens(
+        block_size: int,
+        request: Request) -> list[Tuple[list[int], Optional[tuple[Any, ...]]]]:
+    """Computes prefix paths of a chain of blocks given a sequence of
+    token IDs for Radix Trie prefix caching.
 
     Args:
         block_size: The size of each block.
         request: The request object.
 
     Returns:
-        The list of computed hash values.
+        The list of tuples containing token IDs and extra keys for each block.
     """
     token_ids = request.all_token_ids
 
@@ -428,23 +390,19 @@ def hash_request_tokens(block_size: int,
     curr_mm_idx = 0
 
     ret = []
-    parent_block_hash_value = None
     for start in range(0, len(token_ids), block_size):
         end = start + block_size
         block_token_ids = token_ids[start:end]
-        # Do not hash the block if it is not full.
+        # Do not process the block if it is not full.
         if len(block_token_ids) < block_size:
             break
 
         if req_need_extra_keys:
-            # MM and LoRA requests need extra keys for block-hash computation.
-            req_extra_keys, curr_mm_idx = generate_block_hash_extra_keys(
+            # MM and LoRA requests need extra keys for Radix Trie prefix matching.
+            req_extra_keys, curr_mm_idx = generate_block_extra_keys(
                 request, start, end, curr_mm_idx)
 
-        block_hash = hash_block_tokens(parent_block_hash_value,
-                                       block_token_ids, req_extra_keys)
-        ret.append(block_hash)
-        parent_block_hash_value = block_hash.hash_value
+        ret.append((block_token_ids, req_extra_keys))
     return ret
 
 
@@ -554,8 +512,8 @@ def _get_kv_cache_config_uniform_type(vllm_config: VllmConfig,
 
 
 def get_kv_cache_configs(vllm_config: VllmConfig,
-                         kv_cache_specs: List[KVCacheSpec],
-                         available_memory: int) -> List[KVCacheConfig]:
+                         kv_cache_specs: list[KVCacheSpec],
+                         available_memory: int) -> list[KVCacheConfig]:
     """
     Generates the KV cache configuration for a model
     TODO: support hybrid models with more than one type of KV cache.
